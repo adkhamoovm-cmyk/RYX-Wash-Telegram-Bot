@@ -409,34 +409,32 @@ def test_customer_order_history_shows_friendly_status():
     run(scenario())
 
 
-def test_director_can_skip_manual_car_photo():
+def test_director_can_skip_manual_car_color_without_asking_for_photo():
     async def scenario():
         engine, sessions, _settings, scheduler, router = await make_context()
         try:
             state = RecordingState(
                 {
-                    "current_car": {
-                        "car_category": "Sedan",
-                        "car_model": "Test model",
-                        "car_price": 100000,
-                        "plate_number": "01A123BC",
-                        "color": "qora",
-                    }
+                    "car_category": "Sedan",
+                    "car_model": "Test model",
+                    "car_price": 100000,
+                    "plate_number": "01A123BC",
                 }
             )
             message = RecordingMessage(
                 RecordingBot(),
                 DIRECTOR_ID,
-                "⏭️ Rasmni o'tkazib yuborish",
+                "⏭️ O'tkazib yuborish",
             )
-            await handler(router, "message", "manual_skip_car_photo")(
+            await handler(router, "message", "manual_car_color")(
                 message, state
             )
 
             data = await state.get_data()
             assert data["cars"][0]["car_photo_id"] is None
             assert data["cars"][0]["car_model"] == "Test model"
-            assert "Rasm o'tkazib yuborildi" in str(message.answer_calls[0][0])
+            assert data["cars"][0]["color"] is None
+            assert "Yana mashina qo'shasizmi?" in str(message.answer_calls[0][0])
         finally:
             await engine.dispose()
 
