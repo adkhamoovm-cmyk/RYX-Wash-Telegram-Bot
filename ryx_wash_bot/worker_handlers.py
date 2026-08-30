@@ -27,6 +27,7 @@ from .keyboards import (
     worker_cabinet_period_keyboard,
     worker_menu_keyboard,
     worker_order_decision_keyboard,
+    worker_payment_keyboard,
     worker_status_keyboard,
 )
 from .models import Cancellation, Order, User, Worker
@@ -38,6 +39,7 @@ from .scheduler import (
 )
 from .states import (
     CancellationStates,
+    WorkerOrderStates,
     WorkerCompletionStates,
     WorkerRegistrationStates,
 )
@@ -55,6 +57,14 @@ ACTIVE_ACCEPTED_STATUSES = {
 
 def _safe(value: object) -> str:
     return html.escape(str(value))
+
+
+def _plate_display(plate_number: str | None) -> str:
+    return plate_number or "Ishchi manzilda kiritadi"
+
+
+def _payment_display(payment_method: str | None) -> str:
+    return payment_method or "Mijoz oldida aniqlanadi"
 
 
 def now_tashkent() -> datetime:
@@ -185,7 +195,7 @@ def _register_user_routes(
                 lines.append(
                     f"• {order_date:%d.%m.%Y} | "
                     f"{_safe(order.car_model)} | "
-                    f"{_safe(order.plate_number)} | "
+                    f"{_safe(_plate_display(order.plate_number))} | "
                     f"{_safe(format_price(int(order.car_price)))}"
                 )
         return "\n".join(lines)
@@ -294,9 +304,9 @@ def _register_user_routes(
             f"<b>📋 Navbatdagi buyurtma #{order.id}</b>\n\n"
             f"<b>👤 Mijoz:</b> {_safe(customer.name if customer else '—')}\n"
             f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
-            f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
+            f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
             f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
-            f"<b>💳 To'lov:</b> {_safe(order.payment_method)}\n"
+            f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
             f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
             f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}\n\n"
@@ -549,7 +559,7 @@ def _register_user_routes(
                 settings.director_id,
             f"<b>📋 Buyurtma #{order.id}</b>\n"
             f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
-            f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
+            f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
             f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}",
                 reply_markup=new_order_assignment_keyboard(order.id),
@@ -1055,8 +1065,8 @@ def _register_user_routes(
             f"<b>✅ Buyurtma #{order.id} qabul qilindi</b>\n\n"
             f"<b>👤 Mijoz:</b> {_safe(customer_name)}\n"
             f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
-            f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
-            f"<b>💳 To'lov:</b> {_safe(order.payment_method)}\n"
+            f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
+            f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
             f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
             f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
@@ -1377,6 +1387,26 @@ def _register_user_routes(
                     "Statuslarni ketma-ket yangilang.", show_alert=True
                 )
                 return
+            if stage == "arrived" and (
+                not order.plate_number or not order.payment_method
+            ):
+                await state.update_data(order_id=order_id)
+                await callback.answer()
+                await callback.message.edit_reply_markup(reply_markup=None)
+                if not order.plate_number:
+                    await state.set_state(WorkerOrderStates.waiting_plate)
+                    await callback.message.answer(
+                        "🪪 Mashinani ko‘rdingizmi? Endi uning davlat raqamini "
+                        "kiriting:",
+                        reply_markup=ReplyKeyboardRemove(),
+                    )
+                else:
+                    await state.set_state(WorkerOrderStates.waiting_payment)
+                    await callback.message.answer(
+                        "💳 Mijoz oldidagi to‘lov turini tanlang:",
+                        reply_markup=worker_payment_keyboard(order_id),
+                    )
+                return
             order.status = new_status
             if stage == "route":
                 order.route_started_at = timestamp
@@ -1390,7 +1420,7 @@ def _register_user_routes(
         await callback.bot.send_message(
             settings.director_id,
             f"<b>{_safe(worker.name)}</b> | {_safe(model)} | "
-            f"{_safe(plate)}\n{notice}",
+            f"{_safe(_plate_display(plate))}\n{notice}",
         )
         await callback.message.edit_reply_markup(
             reply_markup=worker_status_keyboard(order_id, next_stage)
@@ -1402,6 +1432,108 @@ def _register_user_routes(
             await callback.message.answer(
                 f"Mijoz telefoni: <b>{_safe(customer.phone if customer else '—')}</b>"
             )
+        await callback.answer()
+
+    @router.message(WorkerOrderStates.waiting_plate, F.text)
+    async def receive_order_plate(message: Message, state: FSMContext) -> None:
+        if not message.from_user:
+            return
+        plate = " ".join(message.text.split()).upper()
+        if not plate or len(plate) > 30:
+            await message.answer(
+                "❌ Davlat raqami bo‘sh bo‘lmasin va 30 belgidan oshmasin."
+            )
+            return
+        data = await state.get_data()
+        order_id = data.get("order_id")
+        if not isinstance(order_id, int):
+            await state.clear()
+            await message.answer("❌ Buyurtma ma'lumoti topilmadi.")
+            return
+        async with sessions() as session:
+            order, worker = await worker_order_and_worker(
+                session, order_id, message.from_user.id
+            )
+            if (
+                not order
+                or not worker
+                or order.status != "yo‘lda"
+                and order.status != "yo'lda"
+            ):
+                await state.clear()
+                await message.answer(
+                    "❌ Buyurtma topilmadi yoki bu bosqich endi faol emas."
+                )
+                return
+            order.plate_number = plate
+            await session.commit()
+        await state.set_state(WorkerOrderStates.waiting_payment)
+        await message.answer(
+            f"✅ Davlat raqami saqlandi: <b>{_safe(plate)}</b>\n"
+            "Endi mijoz oldidagi to‘lov turini tanlang:",
+            reply_markup=worker_payment_keyboard(order_id),
+        )
+
+    @router.callback_query(
+        WorkerOrderStates.waiting_payment,
+        F.data.startswith("worker_payment:"),
+    )
+    async def receive_worker_payment(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not callback.from_user:
+            return
+        try:
+            _, payment_method, order_id_raw = callback.data.split(":")
+            order_id = int(order_id_raw)
+        except (TypeError, ValueError):
+            await callback.answer("❌ To‘lov ma'lumoti noto‘g‘ri.", show_alert=True)
+            return
+        if payment_method not in {"Naqd", "Karta"}:
+            await callback.answer("❌ To‘lov turi topilmadi.", show_alert=True)
+            return
+        async with sessions() as session:
+            order, worker = await worker_order_and_worker(
+                session, order_id, callback.from_user.id
+            )
+            if (
+                not order
+                or not worker
+                or order.status not in {"yo‘lda", "yo'lda"}
+                or not order.plate_number
+            ):
+                await state.clear()
+                await callback.answer(
+                    "❌ Buyurtma topilmadi yoki avval davlat raqamini kiriting.",
+                    show_alert=True,
+                )
+                return
+            order.payment_method = payment_method
+            order.status = "yetib_keldi"
+            order.arrived_at = now_tashkent()
+            customer = await session.get(User, order.customer_id)
+            customer_phone = customer.phone if customer else "—"
+            worker_name = worker.name
+            model = order.car_model
+            plate = order.plate_number
+            await session.commit()
+        await state.clear()
+        await callback.bot.send_message(
+            settings.director_id,
+            f"<b>{_safe(worker_name)}</b> | {_safe(model)} | "
+            f"{_safe(plate)} | {_safe(payment_method)}\n"
+            "Manzilga yetib keldi.",
+        )
+        await callback.message.edit_reply_markup(
+            reply_markup=worker_status_keyboard(order_id, "washing")
+        )
+        await callback.message.answer(
+            f"✅ To‘lov turi saqlandi: <b>{_safe(payment_method)}</b>\n"
+            "Buyurtma manzilga yetib keldi deb belgilandi."
+        )
+        await callback.message.answer(
+            f"Mijoz telefoni: <b>{_safe(customer_phone)}</b>"
+        )
         await callback.answer()
 
     @router.message(WorkerCompletionStates.waiting_before_photo, F.photo)
@@ -1460,10 +1592,10 @@ def _register_user_routes(
                  f"<b>👤 Mijoz:</b> {_safe(customer.name if customer else '—')} "
                 f"({_safe(customer.phone if customer else '—')})\n"
                  f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
-                 f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
+                 f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
                  f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
                  f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-                 f"<b>💳 To'lov:</b> {_safe(order.payment_method)}\n"
+            f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
                  f"<b>⏱️ Ish davomiyligi:</b> {_safe(duration)}\n"
                  f"<b>📝 Izoh:</b> {_safe(comment)}"
             )

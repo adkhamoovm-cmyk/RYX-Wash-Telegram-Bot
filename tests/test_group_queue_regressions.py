@@ -502,6 +502,97 @@ def test_crm_search_state_then_worker_menu_starts_worker_registration():
     run(scenario())
 
 
+def test_worker_enters_missing_manual_order_plate_at_arrival():
+    async def scenario():
+        engine, sessions, settings, _scheduler, router = await make_context()
+        try:
+            async with sessions() as session:
+                session.add_all(
+                    [
+                        User(
+                            telegram_id=CUSTOMER_ID,
+                            name="Mijoz",
+                            phone="+998901234567",
+                            rol="mijoz",
+                        ),
+                        User(
+                            telegram_id=WORKER_ONE_ID,
+                            name="Ishchi",
+                            phone="+998901234568",
+                            rol="ishchi",
+                        ),
+                        Worker(
+                            user_id=WORKER_ONE_ID,
+                            name="Ishchi",
+                            phone="+998901234568",
+                            share_percent=Decimal("30"),
+                            status="band",
+                        ),
+                        Order(
+                            customer_id=CUSTOMER_ID,
+                            worker_id=WORKER_ONE_ID,
+                            car_category="Sedan",
+                            car_model="Chevrolet Cobalt",
+                            car_price=Decimal("50000"),
+                            plate_number=None,
+                            payment_method=None,
+                            status="yo'lda",
+                        ),
+                    ]
+                )
+                await session.commit()
+                order_id = await session.scalar(
+                    select(Order.id)
+                    .where(Order.customer_id == CUSTOMER_ID)
+                    .order_by(Order.id.desc())
+                )
+
+            bot = RecordingBot()
+            state = RecordingState({"order_id": order_id})
+            message = RecordingMessage(
+                bot,
+                WORKER_ONE_ID,
+                "01 A 123 BC",
+            )
+            await handler(router, "message", "receive_order_plate")(
+                message, state
+            )
+
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order is not None
+                assert order.plate_number == "01 A 123 BC"
+                assert order.payment_method is None
+                assert order.status == "yo'lda"
+
+            payment_callback = RecordingCallback(
+                f"worker_payment:Karta:{order_id}",
+                WORKER_ONE_ID,
+                bot,
+            )
+            await handler(router, "callback_query", "receive_worker_payment")(
+                payment_callback, state
+            )
+
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order is not None
+                assert order.plate_number == "01 A 123 BC"
+                assert order.payment_method == "Karta"
+                assert order.status == "yetib_keldi"
+
+            assert state.cleared is True
+            assert any(
+                "01 A 123 BC" in str(call[2])
+                for call in bot.calls
+                if call[0] == "send_message" and call[1] == settings.director_id
+            )
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
 def test_customer_location_submission_sends_group_summary_and_location():
     async def scenario():
         engine, sessions, _settings, _scheduler, router = await make_context()

@@ -64,7 +64,9 @@ async def create_tables(engine: AsyncEngine) -> None:
                 """
                 ALTER TABLE orders
                     ALTER COLUMN latitude DROP NOT NULL,
-                    ALTER COLUMN longitude DROP NOT NULL
+                    ALTER COLUMN longitude DROP NOT NULL,
+                    ALTER COLUMN plate_number DROP NOT NULL,
+                    ALTER COLUMN payment_method DROP NOT NULL
                 """
             )
         )

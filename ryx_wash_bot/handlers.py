@@ -161,7 +161,7 @@ async def send_group_summary(
     )
     lines = [
         f"{index}. {_safe(order.car_model)} | "
-        f"{_safe(order.plate_number)} | "
+        f"{_safe(order.plate_number or 'Ishchi manzilda kiritadi')} | "
         f"{_safe(format_price(int(order.car_price)))}"
         for index, order in enumerate(orders, 1)
     ]
@@ -431,7 +431,7 @@ def _new_router(
                     )
                     parts.append(
                         f"• 🚗 {_safe(order.car_model)} | "
-                        f"{_safe(order.plate_number)}\n"
+                        f"{_safe(order.plate_number or 'Hali kiritilmagan')}\n"
                         f"  {status}\n"
                         f"  💰 {_safe(format_price(int(order.car_price)))}"
                     )
@@ -1213,7 +1213,7 @@ def _new_router(
                 "car_category": car.car_category,
                 "car_model": car.model,
                 "car_price": model.price,
-                "plate_number": car.plate_number,
+                "plate_number": None,
                 "color": car.color,
             }
         )
@@ -1299,29 +1299,15 @@ def _new_router(
         await state.update_data(
             car_model=model.name,
             car_price=model.price,
+            plate_number=None,
         )
-        await state.set_state(ManualOrderStates.waiting_plate)
+        await state.set_state(ManualOrderStates.waiting_new_color)
         await callback.answer()
         await callback.message.edit_text(
             f"✅ Tanlangan model: <b>{_safe(model.name)}</b>\n"
             f"💰 Narxi: <b>{_safe(format_price(model.price))}</b>\n\n"
-            "🪪 Mashina davlat raqamini kiriting (majburiy):",
-            parse_mode=ParseMode.HTML,
-        )
-
-    @router.message(ManualOrderStates.waiting_plate, F.text)
-    async def manual_plate(message: Message, state: FSMContext) -> None:
-        plate = " ".join(message.text.split()).upper()
-        if not plate or len(plate) > 30:
-            await message.answer(
-                "❌ Davlat raqami majburiy va 30 belgidan oshmasligi kerak."
-            )
-            return
-        await state.update_data(plate_number=plate)
-        await state.set_state(ManualOrderStates.waiting_new_color)
-        await message.answer(
             "🎨 Mashina rangini yozing yoki o'tkazib yuboring (ixtiyoriy):",
-            reply_markup=skip_comment_keyboard(),
+            parse_mode=ParseMode.HTML,
         )
 
     @router.message(ManualOrderStates.waiting_new_color, F.text)
@@ -1336,22 +1322,12 @@ def _new_router(
             await message.answer("❌ Rang 50 belgidan oshmasin.")
             return
         data = await state.get_data()
-        async with session_factory() as session:
-            car = CustomerCar(
-                customer_id=data["customer_id"],
-                car_category=data["car_category"],
-                model=data["car_model"],
-                plate_number=data["plate_number"],
-                color=color,
-            )
-            session.add(car)
-            await session.commit()
         await state.update_data(
             current_car={
                 "car_category": data["car_category"],
                 "car_model": data["car_model"],
                 "car_price": data["car_price"],
-                "plate_number": data["plate_number"],
+                "plate_number": None,
                 "color": color,
             }
         )
@@ -1437,12 +1413,13 @@ def _new_router(
         if not data.get("cars"):
             await callback.answer("⚠️ Avval mashina qo'shing.", show_alert=True)
             return
-        await state.set_state(ManualOrderStates.waiting_payment)
+        await state.set_state(ManualOrderStates.waiting_location)
         await callback.answer()
         await callback.message.edit_text("Mashinalar tanlandi.")
         await callback.message.answer(
-            "To'lov usulini tanlang:",
-            reply_markup=payment_keyboard(),
+            "Lokatsiyani Telegram tugmasi orqali yuboring yoki manzilni "
+            "matn qilib yozish variantini tanlang:",
+            reply_markup=manual_location_keyboard(),
         )
 
     @router.callback_query(
@@ -1532,7 +1509,7 @@ def _new_router(
                     car_price=Decimal(str(car["car_price"])),
                     plate_number=car["plate_number"],
                     car_color=car.get("color"),
-                    payment_method=data["payment_method"],
+                    payment_method=data.get("payment_method"),
                     latitude=(
                         Decimal(str(data["latitude"]))
                         if data.get("latitude") is not None
@@ -1564,10 +1541,10 @@ def _new_router(
             f"<b>📞 Telefon:</b> {_safe(customer.phone)}\n"
             f"<b>🚗 Kategoriya:</b> {_safe(order.car_category)}\n"
             f"<b>🚗 Model:</b> {_safe(order.car_model)}\n"
-            f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
+                    f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number or 'Ishchi manzilda kiritadi')}\n"
             f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-            f"<b>💳 To'lov:</b> {_safe(order.payment_method)}\n"
+                    f"<b>💳 To'lov:</b> {_safe(order.payment_method or 'Ishchi mijoz oldida aniqlaydi')}\n"
             f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
             f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
                 )

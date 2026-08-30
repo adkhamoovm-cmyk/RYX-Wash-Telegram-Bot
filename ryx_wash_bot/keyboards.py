@@ -250,6 +250,20 @@ def payment_keyboard():
     return builder.as_markup()
 
 
+def worker_payment_keyboard(order_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="💵 Naqd",
+        callback_data=f"worker_payment:Naqd:{order_id}",
+    )
+    builder.button(
+        text="💳 Karta",
+        callback_data=f"worker_payment:Karta:{order_id}",
+    )
+    builder.adjust(2)
+    return builder.as_markup()
+
+
 def location_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.add(
