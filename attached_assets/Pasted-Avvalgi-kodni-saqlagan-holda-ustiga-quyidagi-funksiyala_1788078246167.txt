@@ -1,0 +1,28 @@
+Avvalgi kodni saqlagan holda, ustiga quyidagi funksiyalarni qo'sh. Yangisidan boshlab yozma, mavjud kodni kengaytir.
+
+1. ISHCHI RO'YXATDAN O'TISHI (direktor tomonidan):
+   - Direktor "Ishchi qo'shish" tugmasi orqali: ishchining Telegram ID'si (yoki u /start bosgach avtomatik aniqlansin), ismi, telefon raqami va foiz ulushini (masalan 30%) kiritadi
+   - "workers" jadvalida saqlanadi: user_id, ism, telefon, foiz, holat ("bo'sh" / "band" / "smenada_emas", boshlang'ich qiymati "smenada_emas")
+
+2. ISHCHI SMENASI:
+   - Ishchi uchun "Ishga keldim" va "Ishdan ketdim" tugmalari
+   - "Ishga keldim" bosilsa — holat="bo'sh" bo'ladi, shift boshlanish vaqti saqlanadi
+   - "Ishdan ketdim" bosilsa — holat="smenada_emas" bo'ladi, shift tugash vaqti saqlanadi
+
+3. DIREKTOR — SO'ROVNI ISHCHIGA YUBORISH:
+   - Yangi buyurtma kelganda (mijozdan), direktorga xabar kelgach, "Ishchilarga yuborish" tugmasi bosiladi
+   - Bot faqat holat="bo'sh" bo'lgan ishchilar ro'yxatini inline tugmalar shaklida ko'rsatadi
+   - Direktor birini tanlaydi -> o'sha ishchiga buyurtma yuboriladi, ishchining holati "band" ga o'zgaradi
+
+4. ISHCHI — BUYURTMANI QABUL QILISH:
+   - Ishchiga qisqa xabar keladi: mashina turi + narx + "Qabul qilaman" / "Rad etaman" tugmalari
+   - Agar "Rad etaman" bossa -> direktorga "[Ism] rad etdi" xabari boradi, ishchining holati qayta "bo'sh" ga qaytadi
+   - Agar "Qabul qilaman" bossa -> ishchiga to'liq ma'lumot ochiladi: mijoz ismi-familyasi, manzil/lokatsiya, mashina modeli, davlat raqami, to'lov usuli, izoh. MIJOZNING TELEFON RAQAMI BU YERDA KO'RSATILMASIN.
+
+5. ISHCHI — STATUS YANGILASH (ketma-ket 4 ta tugma):
+   - "Yo'lga chiqdim" -> direktorga xabar: ishchi ismi + mashina modeli + davlat raqami + "Yo'lga chiqdi"
+   - "Manzilga yetib keldim" -> direktorga xuddi shunday xabar boradi, VA aynan shu bosqichda bot ishchiga mijozning telefon raqamini ko'rsatadi
+   - "Yuvish boshlandi" -> direktorga xabar boradi
+   - "Ish yakunlandi" -> bot ishchidan ketma-ket 2 ta rasm so'raydi ("Oldin" va "Keyin"), keyin qisqa izoh so'raydi, vaqtni Asia/Tashkent vaqt zonasida avtomatik belgilaydi, buyurtma statusini "yakunlandi" qiladi, ishchining holatini "bo'sh" ga qaytaradi. Direktorga YAKUNIY hisobot xabari boradi: ishchi ismi, mijoz ismi+telefon, mashina modeli+davlat raqami, narx, to'lov usuli, ish davomiyligi, 2 ta rasm, izoh.
+
+Hozircha faqat shu oddiy holatni (bitta ishchi, muammosiz oqim) ishlaydigan qil. Ishchi band bo'lganda nima bo'lishi, ishchi javob bermasa nima bo'lishi, direktorning qo'lda buyurtma kiritishi va buyurtmani bekor qilishni keyinroq alohida so'rayman — hozir ularni yozma.

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy import text
 
 from .models import Base
 
@@ -22,6 +23,25 @@ def make_engine(database_url: str) -> AsyncEngine:
 async def create_tables(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        # create_all does not alter tables that were created by an earlier
+        # version of the bot, so add the assignment/completion columns safely.
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE orders
+                    ADD COLUMN IF NOT EXISTS worker_id BIGINT REFERENCES workers(user_id),
+                    ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS route_started_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS washing_started_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS before_photo_id VARCHAR(255),
+                    ADD COLUMN IF NOT EXISTS after_photo_id VARCHAR(255),
+                    ADD COLUMN IF NOT EXISTS worker_comment TEXT
+                """
+            )
+        )
 
 
 @asynccontextmanager

@@ -38,10 +38,11 @@ Telegram bot that registers car wash customers and sends new service orders to t
 ## Product
 
 Customers register with their name and Telegram contact, select a car and payment method, share a service location, and create an order. The director receives order details and a Telegram location.
+The director can register workers and assign orders to available staff. Workers manage shifts, accept or reject assignments, report progress, and finish with before/after photos.
 
 ## User preferences
 
-- Do not add worker or director management features until requested separately.
+- Keep the currently requested single-worker happy path simple; do not add assignment timeouts, manual director orders, or order cancellation until requested.
 
 ## Gotchas
 

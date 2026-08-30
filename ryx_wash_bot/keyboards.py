@@ -16,6 +16,21 @@ def customer_menu_keyboard() -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True)
 
 
+def director_menu_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.add(KeyboardButton(text="Ishchi qo'shish"))
+    return builder.as_markup(resize_keyboard=True)
+
+
+def worker_menu_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.row(
+        KeyboardButton(text="Ishga keldim"),
+        KeyboardButton(text="Ishdan ketdim"),
+    )
+    return builder.as_markup(resize_keyboard=True)
+
+
 def category_keyboard():
     builder = InlineKeyboardBuilder()
     for category in categories():
@@ -53,3 +68,46 @@ def skip_comment_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.add(KeyboardButton(text="O'tkazib yuborish"))
     return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
+
+
+def new_order_assignment_keyboard(order_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Ishchilarga yuborish",
+        callback_data=f"assign_workers:{order_id}",
+    )
+    return builder.as_markup()
+
+
+def available_workers_keyboard(order_id: int, workers: list):
+    builder = InlineKeyboardBuilder()
+    for worker in workers:
+        builder.button(
+            text=f"{worker.name} ({worker.share_percent:g}%)",
+            callback_data=f"assign_worker:{order_id}:{worker.user_id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def worker_order_decision_keyboard(order_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Qabul qilaman", callback_data=f"worker_accept:{order_id}")
+    builder.button(text="Rad etaman", callback_data=f"worker_reject:{order_id}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def worker_status_keyboard(order_id: int, next_stage: str):
+    labels = {
+        "route": "Yo'lga chiqdim",
+        "arrived": "Manzilga yetib keldim",
+        "washing": "Yuvish boshlandi",
+        "complete": "Ish yakunlandi",
+    }
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text=labels[next_stage],
+        callback_data=f"worker_status:{next_stage}:{order_id}",
+    )
+    return builder.as_markup()

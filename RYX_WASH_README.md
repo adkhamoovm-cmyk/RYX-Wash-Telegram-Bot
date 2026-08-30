@@ -23,3 +23,14 @@ Telegram users are registered as `rol="mijoz"` and must complete registration
 before creating an order.
 
 The initial vehicle catalog and prices are in `ryx_wash_bot/catalog.py`.
+
+## Worker flow
+
+- The director uses **Ishchi qo'shish** and enters the worker's Telegram ID,
+  name, phone number, and share percentage.
+- A worker starts or ends a shift with **Ishga keldim** and **Ishdan ketdim**.
+- A new order can be sent only to a worker whose status is `bo'sh`.
+- The worker accepts or rejects the order. The customer's phone is hidden until
+  the worker reaches the customer's location.
+- Completion requires sequential **Oldin** and **Keyin** photos and a short
+  comment. The final report time uses the `Asia/Tashkent` timezone.

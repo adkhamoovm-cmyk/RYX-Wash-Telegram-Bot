@@ -16,13 +16,17 @@ from .keyboards import (
     category_keyboard,
     contact_keyboard,
     customer_menu_keyboard,
+    director_menu_keyboard,
     location_keyboard,
     model_keyboard,
+    new_order_assignment_keyboard,
     payment_keyboard,
     skip_comment_keyboard,
+    worker_menu_keyboard,
 )
 from .models import Order, User
 from .states import OrderStates, RegistrationStates
+from .worker_handlers import register_worker_routes
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +68,26 @@ def _new_router(
             if user is None:
                 user = User(
                     telegram_id=message.from_user.id,
-                    rol="mijoz",
+                    rol="direktor" if message.from_user.id == settings.director_id else "mijoz",
                 )
                 session.add(user)
                 await session.commit()
+
+            if user.rol == "direktor":
+                await state.clear()
+                await message.answer(
+                    "Direktor paneli.",
+                    reply_markup=director_menu_keyboard(),
+                )
+                return
+
+            if user.rol == "ishchi":
+                await state.clear()
+                await message.answer(
+                    "Ishchi paneli.",
+                    reply_markup=worker_menu_keyboard(),
+                )
+                return
 
             if user.rol != "mijoz":
                 await state.clear()
@@ -294,7 +314,11 @@ def _new_router(
 
             try:
                 bot = message.bot
-                await bot.send_message(settings.director_id, director_text)
+                director_message = await bot.send_message(
+                    settings.director_id,
+                    director_text,
+                    reply_markup=new_order_assignment_keyboard(order.id),
+                )
                 await bot.send_location(
                     settings.director_id,
                     latitude=float(order.latitude),
@@ -319,4 +343,5 @@ def _new_router(
             return
         await save_and_notify(message, state, comment)
 
+    register_worker_routes(router, session_factory, settings)
     return router

@@ -21,6 +21,30 @@ class User(Base):
     )
 
     orders: Mapped[list["Order"]] = relationship(back_populates="customer")
+    worker: Mapped["Worker | None"] = relationship(back_populates="user")
+
+
+class Worker(Base):
+    __tablename__ = "workers"
+
+    user_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id"), primary_key=True
+    )
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    phone: Mapped[str] = mapped_column(String(40), nullable=False)
+    share_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="smenada_emas"
+    )
+    shift_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    shift_ended_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="worker")
+    orders: Mapped[list["Order"]] = relationship(back_populates="worker")
 
 
 class Order(Base):
@@ -29,6 +53,9 @@ class Order(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     customer_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.telegram_id"), nullable=False, index=True
+    )
+    worker_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("workers.user_id"), nullable=True, index=True
     )
     car_category: Mapped[str] = mapped_column(String(50), nullable=False)
     car_model: Mapped[str] = mapped_column(String(100), nullable=False)
@@ -39,8 +66,30 @@ class Order(Base):
     longitude: Mapped[Decimal] = mapped_column(Numeric(10, 7), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="yangi")
+    assigned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    route_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    arrived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    washing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    before_photo_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    after_photo_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    worker_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
     customer: Mapped[User] = relationship(back_populates="orders")
+    worker: Mapped[Worker | None] = relationship(back_populates="orders")
