@@ -957,7 +957,9 @@ def test_wash_timer_notifies_worker_without_releasing_group_assignment():
             orders = await load_orders(sessions, order_ids)
             assert all(order.worker_id == WORKER_ONE_ID for order in orders)
             assert orders[0].arrival_eta_minutes == 25
+            assert orders[0].arrival_eta_at is not None
             assert orders[0].status == "yuvish_boshlandi"
+            assert any("gacha" in text for text in bot.messages())
             assert f"wash-timeout:{order_ids[0]}" in scheduler.jobs
             async with sessions() as session:
                 worker = await session.get(Worker, WORKER_ONE_ID)
@@ -1046,6 +1048,7 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             orders = await load_orders(sessions, order_ids)
             assert orders[0].status == "yakunlandi"
             assert orders[0].arrival_eta_minutes == 30
+            assert orders[0].arrival_eta_at is not None
             assert orders[1].status == "ishchiga_yuborildi"
             assert orders[1].worker_id == WORKER_ONE_ID
             assert not scheduler.jobs

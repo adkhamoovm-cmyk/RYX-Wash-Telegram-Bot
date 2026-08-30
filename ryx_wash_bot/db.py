@@ -37,6 +37,7 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS route_started_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS arrival_eta_minutes INTEGER,
+                    ADD COLUMN IF NOT EXISTS arrival_eta_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS washing_started_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS before_photo_id VARCHAR(255),

@@ -171,6 +171,9 @@ class Order(Base):
     arrival_eta_minutes: Mapped[int | None] = mapped_column(
         Integer, nullable=True
     )
+    arrival_eta_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     washing_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -73,6 +73,13 @@ def now_tashkent() -> datetime:
     return datetime.now(TASHKENT)
 
 
+def _format_eta_time(value: datetime) -> str:
+    """Format an ETA as a Tashkent (UTC+5) clock time."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=TASHKENT)
+    return value.astimezone(TASHKENT).strftime("%H:%M")
+
+
 def _duration_text(start: datetime | None, end: datetime | None) -> str:
     if not start or not end:
         return "—"
@@ -1881,13 +1888,18 @@ def _register_user_routes(
                 )
                 return
             order.arrival_eta_minutes = eta_minutes
+            arrival_eta_at = now_tashkent() + timedelta(minutes=eta_minutes)
+            order.arrival_eta_at = arrival_eta_at
             customer_id = order.customer_id
             model = order.car_model
             plate = order.plate_number
             worker_name = worker.name
             await session.commit()
         await state.clear()
-        eta_text = f"⏱ Taxminiy yetib kelish: <b>{eta_minutes} daqiqa</b>."
+        eta_text = (
+            f"⏱ Taxminiy yetib kelish: "
+            f"<b>{_format_eta_time(arrival_eta_at)}</b> gacha."
+        )
         await notify_customer(
             message.bot,
             customer_id,

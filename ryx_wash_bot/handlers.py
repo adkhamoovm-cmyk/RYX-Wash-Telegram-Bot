@@ -92,6 +92,13 @@ CUSTOMER_STATUS_LABELS = {
     "yakunlandi": "🎉 Buyurtma yakunlandi",
     "bekor_qilindi": "🚫 Buyurtma bekor qilindi",
 }
+
+
+def _format_eta_time(value: datetime) -> str:
+    """Format an ETA as a Tashkent (UTC+5) clock time."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=TASHKENT)
+    return value.astimezone(TASHKENT).strftime("%H:%M")
 MAIN_MENU_TEXTS = frozenset(
     {
         "🚗➕ Yangi buyurtma",
@@ -450,8 +457,8 @@ def _new_router(
                     )
                     eta_line = (
                         f"  ⏱ Taxminiy yetib kelish: "
-                        f"{order.arrival_eta_minutes} daqiqa\n"
-                        if order.arrival_eta_minutes is not None
+                        f"{_format_eta_time(order.arrival_eta_at)} gacha\n"
+                        if order.arrival_eta_at is not None
                         and order.status == "yo'lda"
                         else ""
                     )
