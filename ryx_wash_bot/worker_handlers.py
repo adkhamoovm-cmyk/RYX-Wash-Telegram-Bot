@@ -1634,6 +1634,13 @@ def _register_user_routes(
                             "kiriting:",
                             reply_markup=ReplyKeyboardRemove(),
                         )
+                    elif not order.payment_method:
+                        await state.set_state(WorkerOrderStates.waiting_payment)
+                        await callback.message.answer(
+                            "✅ Yuvish tugadi. Mijoz oldidagi to‘lov turini "
+                            "tanlang:",
+                            reply_markup=worker_payment_keyboard(order_id),
+                        )
                     else:
                         await callback.message.answer(
                             "✅ Ish tugadi. Birinchi rasmni yuboring (Oldin):",
@@ -1648,16 +1655,6 @@ def _register_user_routes(
             if order.status != expected_status:
                 await callback.answer(
                     "Statuslarni ketma-ket yangilang.", show_alert=True
-                )
-                return
-            if stage == "arrived" and not order.payment_method:
-                await state.update_data(order_id=order_id)
-                await callback.answer()
-                await callback.message.edit_reply_markup(reply_markup=None)
-                await state.set_state(WorkerOrderStates.waiting_payment)
-                await callback.message.answer(
-                    "💳 Mijoz oldidagi to‘lov turini tanlang:",
-                    reply_markup=worker_payment_keyboard(order_id),
                 )
                 return
             order.status = new_status
@@ -1732,12 +1729,21 @@ def _register_user_routes(
                 return
             order.plate_number = plate
             await session.commit()
-        await state.set_state(WorkerCompletionStates.waiting_before_photo)
-        await message.answer(
-            f"✅ Davlat raqami saqlandi: <b>{_safe(plate)}</b>\n"
-            "Birinchi rasmni yuboring (Oldin):",
-            reply_markup=ReplyKeyboardRemove(),
-        )
+            payment_method = order.payment_method
+        if not payment_method:
+            await state.set_state(WorkerOrderStates.waiting_payment)
+            await message.answer(
+                f"✅ Davlat raqami saqlandi: <b>{_safe(plate)}</b>\n"
+                "Endi mijoz oldidagi to‘lov turini tanlang:",
+                reply_markup=worker_payment_keyboard(order_id),
+            )
+        else:
+            await state.set_state(WorkerCompletionStates.waiting_before_photo)
+            await message.answer(
+                f"✅ Davlat raqami saqlandi: <b>{_safe(plate)}</b>\n"
+                "Birinchi rasmni yuboring (Oldin):",
+                reply_markup=ReplyKeyboardRemove(),
+            )
 
     @router.callback_query(
         WorkerOrderStates.waiting_payment,
@@ -1764,17 +1770,24 @@ def _register_user_routes(
             if (
                 not order
                 or not worker
-                or order.status not in {"yo‘lda", "yo'lda"}
+                or order.status not in {"yo‘lda", "yo'lda", "yakunlanmoqda"}
+                or (
+                    order.status == "yakunlanmoqda"
+                    and not order.plate_number
+                )
             ):
                 await state.clear()
                 await callback.answer(
-                    "❌ Buyurtma topilmadi yoki bu bosqich endi faol emas.",
+                    "❌ Avval davlat raqamini kiriting yoki bu bosqich "
+                    "endi faol emas.",
                     show_alert=True,
                 )
                 return
             order.payment_method = payment_method
-            order.status = "yetib_keldi"
-            order.arrived_at = now_tashkent()
+            order_status = order.status
+            if order.status in {"yo‘lda", "yo'lda"}:
+                order.status = "yetib_keldi"
+                order.arrived_at = now_tashkent()
             customer = await session.get(User, order.customer_id)
             customer_phone = customer.phone if customer else "—"
             worker_name = worker.name
@@ -1786,14 +1799,22 @@ def _register_user_routes(
             settings.director_id,
             f"<b>{_safe(worker_name)}</b> | {_safe(model)} | "
             f"{_safe(plate)} | {_safe(payment_method)}\n"
-            "Manzilga yetib keldi.",
+            + (
+                "Manzilga yetib keldi."
+                if order_status in {"yo‘lda", "yo'lda"}
+                else "Yuvish tugadi, to‘lov turi tanlandi."
+            ),
         )
         await callback.message.edit_reply_markup(
             reply_markup=worker_status_keyboard(order_id, "washing")
         )
         await callback.message.answer(
             f"✅ To‘lov turi saqlandi: <b>{_safe(payment_method)}</b>\n"
-            "Buyurtma manzilga yetib keldi deb belgilandi."
+            + (
+                "Buyurtma manzilga yetib keldi deb belgilandi."
+                if order_status in {"yo‘lda", "yo'lda"}
+                else "Endi yakuniy rasmlarni yuboring."
+            )
         )
         await callback.message.answer(
             f"Mijoz telefoni: <b>{_safe(customer_phone)}</b>"

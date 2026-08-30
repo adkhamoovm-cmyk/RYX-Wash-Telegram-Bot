@@ -641,7 +641,27 @@ def test_worker_enters_missing_manual_order_plate_after_washing():
                 assert order.status == "yakunlanmoqda"
 
             assert state.cleared is False
-            assert any("Birinchi rasmni yuboring" in str(text) for text, _ in message.answer_calls)
+            assert any("to‘lov" in str(text) for text, _ in message.answer_calls)
+
+            payment_callback = RecordingCallback(
+                f"worker_payment:Karta:{order_id}",
+                WORKER_ONE_ID,
+                bot,
+            )
+            await handler(router, "callback_query", "receive_worker_payment")(
+                payment_callback,
+                state,
+            )
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order is not None
+                assert order.payment_method == "Karta"
+                assert order.status == "yakunlanmoqda"
+            assert state.cleared is True
+            assert any(
+                "yakuniy rasmlarni yuboring" in str(text)
+                for text, _ in payment_callback.message.answer_calls
+            )
         finally:
             await engine.dispose()
 
