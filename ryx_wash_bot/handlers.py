@@ -51,7 +51,6 @@ from .keyboards import (
     report_period_keyboard,
     report_workers_keyboard,
     saved_cars_keyboard,
-    skip_color_keyboard,
     skip_comment_keyboard,
     worker_menu_keyboard,
 )
@@ -1505,45 +1504,25 @@ def _new_router(
         if model is None:
             await callback.answer("❌ Model topilmadi.", show_alert=True)
             return
-        await state.update_data(
-            car_model=model.name,
-            car_price=model.price,
-            plate_number=None,
+        data = await state.get_data()
+        await append_manual_car(
+            state,
+            {
+                "car_category": data["car_category"],
+                "car_model": model.name,
+                "car_price": model.price,
+                "plate_number": None,
+                "color": None,
+            },
         )
-        await state.set_state(ManualOrderStates.waiting_new_color)
+        await state.set_state(ManualOrderStates.waiting_next_car)
         await callback.answer()
         await callback.message.edit_text(
             f"✅ Tanlangan model: <b>{_safe(model.name)}</b>\n"
-            f"💰 Narxi: <b>{_safe(format_price(model.price))}</b>\n\n"
-            "🎨 Mashina rangini yozing yoki o'tkazib yuboring (ixtiyoriy):",
+            f"💰 Narxi: <b>{_safe(format_price(model.price))}</b>",
             parse_mode=ParseMode.HTML,
-            reply_markup=skip_color_keyboard(),
         )
-
-    @router.message(ManualOrderStates.waiting_new_color, F.text)
-    async def manual_car_color(message: Message, state: FSMContext) -> None:
-        color = (
-            None
-            if message.text.strip()
-            in {"⏭️ O'tkazib yuborish", "O'tkazib yuborish"}
-            else message.text.strip()
-        )
-        if color and len(color) > 50:
-            await message.answer("❌ Rang 50 belgidan oshmasin.")
-            return
-        data = await state.get_data()
-        await state.update_data(
-            current_car={
-                "car_category": data["car_category"],
-                "car_model": data["car_model"],
-                "car_price": data["car_price"],
-                "plate_number": None,
-                "color": color,
-            }
-        )
-        await append_manual_car(state, (await state.get_data())["current_car"])
-        await state.set_state(ManualOrderStates.waiting_next_car)
-        await message.answer(
+        await callback.message.answer(
             "✅ Mashina buyurtmaga qo'shildi. Yana mashina qo'shasizmi?",
             reply_markup=next_car_keyboard("manual"),
         )

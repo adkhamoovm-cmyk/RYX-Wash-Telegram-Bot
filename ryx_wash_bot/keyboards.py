@@ -363,12 +363,6 @@ def skip_comment_keyboard() -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
 
 
-def skip_color_keyboard() -> ReplyKeyboardMarkup:
-    builder = ReplyKeyboardBuilder()
-    builder.add(KeyboardButton(text="⏭️ O'tkazib yuborish"))
-    return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
-
-
 def new_order_assignment_keyboard(order_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(

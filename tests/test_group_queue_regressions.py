@@ -409,7 +409,7 @@ def test_customer_order_history_shows_friendly_status():
     run(scenario())
 
 
-def test_director_can_skip_manual_car_color_without_asking_for_photo():
+def test_director_manual_order_skips_color_and_photo():
     async def scenario():
         engine, sessions, _settings, scheduler, router = await make_context()
         try:
@@ -421,20 +421,26 @@ def test_director_can_skip_manual_car_color_without_asking_for_photo():
                     "plate_number": "01A123BC",
                 }
             )
-            message = RecordingMessage(
-                RecordingBot(),
+            bot = RecordingBot()
+            callback = RecordingCallback(
+                "manual_model:sedan-cobalt",
                 DIRECTOR_ID,
-                "⏭️ O'tkazib yuborish",
+                bot,
             )
-            await handler(router, "message", "manual_car_color")(
-                message, state
+            await handler(router, "callback_query", "manual_car_model")(
+                callback, state
             )
 
             data = await state.get_data()
             assert data["cars"][0]["car_photo_id"] is None
-            assert data["cars"][0]["car_model"] == "Test model"
+            assert data["cars"][0]["car_model"] == "Chevrolet Cobalt"
             assert data["cars"][0]["color"] is None
-            assert "Yana mashina qo'shasizmi?" in str(message.answer_calls[0][0])
+            assert callback.message.answer_calls
+            assert "Yana mashina qo'shasizmi?" in str(
+                callback.message.answer_calls[0][0]
+            )
+            assert "rang" not in str(callback.message.edited_text[0]).lower()
+            assert "rasm" not in str(callback.message.answer_calls[0][0]).lower()
         finally:
             await engine.dispose()
 
