@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from ryx_wash_bot.config import Settings
 from ryx_wash_bot.handlers import (
     MainMenuStateResetMiddleware,
+    _parse_manual_visit_time,
     _new_router,
     send_group_summary,
 )
@@ -249,6 +250,19 @@ def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
                 )
                 await session.commit()
             order_ids = await add_group(sessions)
+            async with sessions() as session:
+                for order_id in order_ids:
+                    order = await session.get(Order, order_id)
+                    assert order is not None
+                    order.visit_at = datetime(
+                        2026,
+                        8,
+                        30,
+                        17,
+                        0,
+                        tzinfo=timezone(timedelta(hours=5)),
+                    )
+                await session.commit()
             bot = RecordingBot()
 
             await handler(router, "callback_query", "choose_group_wash_duration")(
@@ -276,16 +290,18 @@ def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
             assert not scheduler.jobs
             assert any("60 daqiqa" in text for text in bot.messages())
 
+            accept_callback = RecordingCallback(
+                f"worker_accept:{order_ids[0]}", WORKER_ONE_ID, bot
+            )
             await handler(router, "callback_query", "accept_order")(
-                RecordingCallback(
-                    f"worker_accept:{order_ids[0]}", WORKER_ONE_ID, bot
-                )
+                accept_callback
             )
             orders = await load_orders(sessions, order_ids)
             assert orders[0].status == "ishchi_qabul_qildi"
             assert orders[1].status == "navbatda"
             assert all(order.worker_id == WORKER_ONE_ID for order in orders)
             assert any(CUSTOMER_ID == call[1] for call in bot.calls)
+            assert "30.08.2026 17:00" in str(accept_callback.message.edited_text)
             assert not scheduler.jobs
         finally:
             await engine.dispose()
@@ -445,6 +461,18 @@ def test_director_manual_order_skips_color_and_photo():
             await engine.dispose()
 
     run(scenario())
+
+
+def test_manual_visit_time_requires_a_future_tashkent_time():
+    tashkent = timezone(timedelta(hours=5))
+    now = datetime(2026, 8, 30, 13, 15, tzinfo=tashkent)
+
+    visit_at = _parse_manual_visit_time("17:00", now=now)
+    assert visit_at == datetime(2026, 8, 30, 17, 0, tzinfo=tashkent)
+    assert _parse_manual_visit_time("17.00", now=now) == visit_at
+    assert _parse_manual_visit_time("13:15", now=now) is None
+    assert _parse_manual_visit_time("25:00", now=now) is None
+    assert _parse_manual_visit_time("17:60", now=now) is None
 
 
 def test_start_shift_recovers_stale_busy_status_without_active_order():

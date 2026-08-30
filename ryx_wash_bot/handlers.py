@@ -161,6 +161,38 @@ def _parse_money(value: str, *, whole_only: bool = False) -> Decimal | None:
     return amount.quantize(Decimal("0.01"))
 
 
+VISIT_TIME_RE = re.compile(r"^\s*([01]\d|2[0-3])[:.]([0-5]\d)\s*$")
+
+
+def _parse_manual_visit_time(
+    value: str,
+    *,
+    now: datetime | None = None,
+) -> datetime | None:
+    """Parse a future same-day visit time in the Tashkent timezone."""
+    match = VISIT_TIME_RE.fullmatch(value)
+    if not match:
+        return None
+    current = now.astimezone(TASHKENT) if now else datetime.now(TASHKENT)
+    visit_at = current.replace(
+        hour=int(match.group(1)),
+        minute=int(match.group(2)),
+        second=0,
+        microsecond=0,
+    )
+    if visit_at <= current:
+        return None
+    return visit_at
+
+
+def _format_visit_at(value: datetime | None) -> str:
+    if value is None:
+        return "Vaqt belgilanmagan"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=TASHKENT)
+    return value.astimezone(TASHKENT).strftime("%d.%m.%Y %H:%M")
+
+
 async def send_group_summary(
     bot,
     settings: Settings,
@@ -178,6 +210,11 @@ async def send_group_summary(
         f"<b>🚗 Mashinalar:</b> {len(orders)} ta\n"
         f"<b>💰 Jami:</b> {_safe(format_price(total))}"
     )
+    if orders[0].visit_at is not None:
+        header += (
+            f"\n<b>🕔 Tashrif vaqti:</b> "
+            f"{_safe(_format_visit_at(orders[0].visit_at))}"
+        )
     lines = [
         f"{index}. {_safe(order.car_model)} | "
         f"{_safe(order.plate_number or 'Ishchi manzilda kiritadi')} | "
@@ -1584,11 +1621,33 @@ def _new_router(
             await callback.answer("❌ To'lov usuli topilmadi.", show_alert=True)
             return
         await state.update_data(payment_method=payment_method)
-        await state.set_state(ManualOrderStates.waiting_location)
+        await state.set_state(ManualOrderStates.waiting_visit_time)
         await callback.answer()
         await callback.message.answer(
+            "🕔 Mijoz manziliga bugun qaysi vaqtda borish kerak?\n"
+            "Soatni <code>HH:MM</code> formatida kiriting, masalan: <code>17:00</code>.\n"
+            "Faqat hali o'tmagan bugungi vaqtni kiriting:",
+            parse_mode=ParseMode.HTML,
+        )
+
+    @router.message(ManualOrderStates.waiting_visit_time, F.text)
+    async def manual_visit_time(message: Message, state: FSMContext) -> None:
+        visit_at = _parse_manual_visit_time(message.text)
+        if visit_at is None:
+            await message.answer(
+                "❌ Vaqt noto'g'ri yoki o'tib ketgan. "
+                "Bugungi kelajakdagi vaqtni <code>HH:MM</code> formatida "
+                "kiriting, masalan: <code>17:00</code>.",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+        await state.update_data(visit_at=visit_at.isoformat())
+        await state.set_state(ManualOrderStates.waiting_location)
+        await message.answer(
+            f"✅ Tashrif vaqti: <b>{_safe(_format_visit_at(visit_at))}</b>\n"
             "Lokatsiyani Telegram tugmasi orqali yuboring yoki manzilni "
             "matn qilib yozish variantini tanlang:",
+            parse_mode=ParseMode.HTML,
             reply_markup=manual_location_keyboard(),
         )
 
@@ -1648,6 +1707,20 @@ def _new_router(
             if customer is None:
                 await message.answer("❌ Mijoz topilmadi. Qayta boshlang.")
                 return
+            visit_at_raw = data.get("visit_at")
+            try:
+                visit_at = (
+                    datetime.fromisoformat(visit_at_raw)
+                    if isinstance(visit_at_raw, str)
+                    else None
+                )
+            except ValueError:
+                visit_at = None
+            if visit_at is None:
+                await message.answer(
+                    "❌ Tashrif vaqti topilmadi. Qo'lda buyurtmani qaytadan boshlang."
+                )
+                return
             cars = data["cars"]
             group_id = str(uuid4()) if len(cars) > 1 else None
             orders: list[Order] = []
@@ -1660,6 +1733,7 @@ def _new_router(
                     plate_number=car["plate_number"],
                     car_color=car.get("color"),
                     payment_method=data.get("payment_method"),
+                    visit_at=visit_at,
                     latitude=(
                         Decimal(str(data["latitude"]))
                         if data.get("latitude") is not None
@@ -1695,6 +1769,7 @@ def _new_router(
             f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
                     f"<b>💳 To'lov:</b> {_safe(order.payment_method or 'Ishchi mijoz oldida aniqlaydi')}\n"
+            f"<b>🕔 Tashrif vaqti:</b> {_safe(_format_visit_at(order.visit_at))}\n"
             f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
             f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
                 )

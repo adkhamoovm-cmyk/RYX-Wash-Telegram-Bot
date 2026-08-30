@@ -70,6 +70,14 @@ def _payment_display(payment_method: str | None) -> str:
     return payment_method or "Mijoz oldida aniqlanadi"
 
 
+def _format_visit_at(value: datetime | None) -> str:
+    if value is None:
+        return "Vaqt belgilanmagan"
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=TASHKENT)
+    return value.astimezone(TASHKENT).strftime("%d.%m.%Y %H:%M")
+
+
 def now_tashkent() -> datetime:
     return datetime.now(TASHKENT)
 
@@ -245,10 +253,17 @@ def _register_user_routes(
 
     def worker_offer_text(order: Order) -> str:
         wash_duration = order.wash_duration_minutes or 60
+        visit_line = (
+            f"<b>🕔 Mijoz manziliga borish vaqti:</b> "
+            f"{_safe(_format_visit_at(order.visit_at))}\n"
+            if order.visit_at is not None
+            else ""
+        )
         return (
             f"<b>🆕 Yangi buyurtma #{order.id}</b>\n\n"
             f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n\n"
+            f"{visit_line}"
             f"🧼 Yuvish uchun vaqt: <b>{wash_duration} daqiqa</b>\n\n"
             "📥 Buyurtmani qabul qilasizmi?"
         )
@@ -314,17 +329,24 @@ def _register_user_routes(
                     sibling_count += 1
             customer = await session.get(User, order.customer_id)
             wash_duration = order.wash_duration_minutes or 60
+            visit_line = (
+                f"<b>🕔 Mijoz manziliga borish vaqti:</b> "
+                f"{_safe(_format_visit_at(order.visit_at))}\n"
+                if order.visit_at is not None
+                else ""
+            )
             text = (
-            f"<b>📋 Navbatdagi buyurtma #{order.id}</b>\n\n"
-            f"<b>👤 Mijoz:</b> {_safe(customer.name if customer else '—')}\n"
-            f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
-            f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
-            f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
-            f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
-            f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-            f"🧼 Yuvish uchun vaqt: <b>{wash_duration} daqiqa</b>\n"
-            f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
-            f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}\n\n"
+                f"<b>📋 Navbatdagi buyurtma #{order.id}</b>\n\n"
+                f"<b>👤 Mijoz:</b> {_safe(customer.name if customer else '—')}\n"
+                f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
+                f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
+                f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
+                f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
+                f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                f"{visit_line}"
+                f"🧼 Yuvish uchun vaqt: <b>{wash_duration} daqiqa</b>\n"
+                f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
+                f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}\n\n"
                 "Buyurtmani qabul qilasizmi?"
             )
             latitude = float(order.latitude) if order.latitude is not None else None
@@ -1468,18 +1490,25 @@ def _register_user_routes(
             await session.commit()
             customer_name = customer.name if customer else "—"
             customer_phone = customer.phone if customer else "—"
+            visit_line = (
+                f"<b>🕔 Mijoz manziliga borish vaqti:</b> "
+                f"{_safe(_format_visit_at(order.visit_at))}\n"
+                if order.visit_at is not None
+                else ""
+            )
 
             full_text = (
-            f"<b>✅ Buyurtma #{order.id} qabul qilindi</b>\n\n"
-            f"<b>👤 Mijoz:</b> {_safe(customer_name)}\n"
-            f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
-            f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
-            f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
-            f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-            f"🧼 <b>Yuvish vaqti:</b> "
-            f"{_safe(order.wash_duration_minutes or 60)} daqiqa\n"
-            f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
-            f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
+                f"<b>✅ Buyurtma #{order.id} qabul qilindi</b>\n\n"
+                f"<b>👤 Mijoz:</b> {_safe(customer_name)}\n"
+                f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
+                f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
+                f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
+                f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                f"{visit_line}"
+                f"🧼 <b>Yuvish vaqti:</b> "
+                f"{_safe(order.wash_duration_minutes or 60)} daqiqa\n"
+                f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
+                f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
             )
             latitude = float(order.latitude) if order.latitude is not None else None
             longitude = float(order.longitude) if order.longitude is not None else None

@@ -38,6 +38,7 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS arrival_eta_minutes INTEGER,
                     ADD COLUMN IF NOT EXISTS arrival_eta_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS visit_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS washing_started_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS before_photo_id VARCHAR(255),
@@ -67,6 +68,14 @@ async def create_tables(engine: AsyncEngine) -> None:
                 """
                 CREATE INDEX IF NOT EXISTS ix_orders_order_group_id
                 ON orders (order_group_id)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_orders_visit_at
+                ON orders (visit_at)
                 """
             )
         )

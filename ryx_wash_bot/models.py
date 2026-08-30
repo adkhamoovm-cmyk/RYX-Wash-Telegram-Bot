@@ -136,6 +136,9 @@ class Order(Base):
     car_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     plate_number: Mapped[str | None] = mapped_column(String(30), nullable=True)
     payment_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    visit_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
     latitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 7), nullable=True)
     longitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 7), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
