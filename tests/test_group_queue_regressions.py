@@ -345,6 +345,51 @@ def test_start_routes_existing_customer_worker_and_director_to_their_menus():
     run(scenario())
 
 
+def test_customer_order_history_shows_friendly_status():
+    async def scenario():
+        engine, sessions, _settings, scheduler, router = await make_context()
+        try:
+            async with sessions() as session:
+                session.add(
+                    User(
+                        telegram_id=CUSTOMER_ID,
+                        name="Mijoz",
+                        phone="+998901234567",
+                        rol="mijoz",
+                    )
+                )
+                session.add(
+                    Order(
+                        customer_id=CUSTOMER_ID,
+                        car_category="Sedan",
+                        car_model="Test model",
+                        car_price=Decimal("100000"),
+                        plate_number="01A123BC",
+                        payment_method="Naqd",
+                        status="ishchiga_yuborildi",
+                        created_at=datetime(
+                            2026, 8, 30, 8, 0, tzinfo=timezone.utc
+                        ),
+                    )
+                )
+                await session.commit()
+
+            message = RecordingMessage(
+                RecordingBot(),
+                CUSTOMER_ID,
+                "📋 Buyurtmalar tarixi",
+            )
+            await handler(router, "message", "customer_order_history")(message)
+            text = str(message.answer_calls[0][0])
+            assert "📤 Ishchiga yuborildi" in text
+            assert "🚗 Test model" in text
+            assert "💰" in text
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
 def test_customer_location_submission_sends_group_summary_and_location():
     async def scenario():
         engine, sessions, _settings, _scheduler, router = await make_context()

@@ -76,6 +76,19 @@ TASHKENT = ZoneInfo("Asia/Tashkent")
 CUSTOM_RANGE_RE = re.compile(
     r"^\s*(\d{2}\.\d{2}\.\d{4})\s*[-–—]\s*(\d{2}\.\d{2}\.\d{4})\s*$"
 )
+CUSTOMER_STATUS_LABELS = {
+    "yangi": "🕐 Direktor ko‘rib chiqmoqda",
+    "navbatda": "⏳ Ishchi navbati kutilmoqda",
+    "ishchiga_yuborildi": "📤 Ishchiga yuborildi",
+    "ishchi_qabul_qildi": "✅ Ishchi buyurtmani qabul qildi",
+    "yo‘lda": "🚗 Ishchi yo‘lda",
+    "yo'lda": "🚗 Ishchi yo‘lda",
+    "yetib_keldi": "📍 Ishchi manzilga yetib keldi",
+    "yuvish_boshlandi": "🧼 Yuvish boshlandi",
+    "yakunlanmoqda": "📸 Yakunlanmoqda",
+    "yakunlandi": "🎉 Buyurtma yakunlandi",
+    "bekor_qilindi": "🚫 Buyurtma bekor qilindi",
+}
 
 
 def _parse_money(value: str, *, whole_only: bool = False) -> Decimal | None:
@@ -370,14 +383,18 @@ def _new_router(
                 if len(group_orders) > 1:
                     total = sum(int(order.car_price) for order in group_orders)
                     parts.append(
-                        f"Guruh buyurtmasi — {_safe(format_price(total))}:"
+                        f"🧾 Guruh buyurtmasi — {_safe(format_price(total))}:"
                     )
                 for order in reversed(group_orders):
+                    status = CUSTOMER_STATUS_LABELS.get(
+                        order.status,
+                        f"❔ {_safe(order.status)}",
+                    )
                     parts.append(
-                        f"• {_safe(order.car_model)} | "
-                        f"{_safe(order.plate_number)} | "
-                        f"{_safe(order.status)} | "
-                        f"{_safe(format_price(int(order.car_price)))}"
+                        f"• 🚗 {_safe(order.car_model)} | "
+                        f"{_safe(order.plate_number)}\n"
+                        f"  {status}\n"
+                        f"  💰 {_safe(format_price(int(order.car_price)))}"
                     )
         history_text = "\n".join(parts)
         if len(history_text) > 4000:
