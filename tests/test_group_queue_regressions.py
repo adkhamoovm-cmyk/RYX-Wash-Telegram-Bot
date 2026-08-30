@@ -11,7 +11,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from ryx_wash_bot.config import Settings
-from ryx_wash_bot.handlers import _new_router, send_group_summary
+from ryx_wash_bot.handlers import (
+    MainMenuStateResetMiddleware,
+    _new_router,
+    send_group_summary,
+)
 from ryx_wash_bot.keyboards import saved_cars_keyboard
 from ryx_wash_bot.models import Base, CustomerCar, Order, User, Worker
 from ryx_wash_bot.scheduler import configure_timeout_runtime, expire_worker_offer
@@ -418,6 +422,80 @@ def test_director_can_skip_manual_car_photo():
             assert data["cars"][0]["car_photo_id"] is None
             assert data["cars"][0]["car_model"] == "Test model"
             assert "Rasm o'tkazib yuborildi" in str(message.answer_calls[0][0])
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_main_menu_text_clears_any_active_fsm_state_before_handler():
+    async def scenario():
+        state = RecordingState({"pending_input": "CRM search"})
+        message = RecordingMessage(
+            RecordingBot(),
+            DIRECTOR_ID,
+            "➕👷 Ishchi qo'shish",
+        )
+        called = False
+
+        async def next_handler(event, data):
+            nonlocal called
+            called = True
+            return event
+
+        result = await MainMenuStateResetMiddleware()(
+            next_handler,
+            message,
+            {"state": state},
+        )
+
+        assert result is message
+        assert called is True
+        assert state.cleared is True
+        assert state.data == {}
+
+    run(scenario())
+
+
+def test_crm_search_state_then_worker_menu_starts_worker_registration():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            async with sessions() as session:
+                session.add(
+                    User(
+                        telegram_id=DIRECTOR_ID,
+                        name="Direktor",
+                        phone="+998900000000",
+                        rol="direktor",
+                    )
+                )
+                await session.commit()
+
+            state = RecordingState({"pending_input": "CRM search"})
+            message = RecordingMessage(
+                RecordingBot(),
+                DIRECTOR_ID,
+                "➕👷 Ishchi qo'shish",
+            )
+            start_worker_registration = handler(
+                router, "message", "start_worker_registration"
+            )
+
+            async def next_handler(event, data):
+                await start_worker_registration(event, data["state"])
+                return event
+
+            await MainMenuStateResetMiddleware()(
+                next_handler,
+                message,
+                {"state": state},
+            )
+
+            assert state.cleared is True
+            assert state.states
+            assert "Mijoz" not in str(message.answer_calls[0][0])
+            assert "Telegram ID" in str(message.answer_calls[0][0])
         finally:
             await engine.dispose()
 

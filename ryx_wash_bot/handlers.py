@@ -3,10 +3,11 @@ import logging
 import re
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
+from typing import Any
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from aiogram import F, Router
+from aiogram import BaseMiddleware, F, Router
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
@@ -90,6 +91,42 @@ CUSTOMER_STATUS_LABELS = {
     "yakunlandi": "🎉 Buyurtma yakunlandi",
     "bekor_qilindi": "🚫 Buyurtma bekor qilindi",
 }
+MAIN_MENU_TEXTS = frozenset(
+    {
+        "🚗➕ Yangi buyurtma",
+        "Yangi buyurtma",
+        "📋 Buyurtmalar tarixi",
+        "Buyurtmalar tarixi",
+        "➕👷 Ishchi qo'shish",
+        "Ishchi qo'shish",
+        "📝 Qo'lda buyurtma qo'shish",
+        "Qo'lda buyurtma qo'shish",
+        "🏷️ Narxlarni boshqarish",
+        "Narxlarni boshqarish",
+        "📉 Xarajat qo'shish",
+        "Xarajat qo'shish",
+        "📊 Hisobot",
+        "Hisobot",
+        "Statistika",
+        "🗂️ Mijozlar bazasi",
+        "Mijozlar bazasi",
+        "👤 Mening kabinetim",
+        "Mening kabinetim",
+        "🟢 Ishga keldim",
+        "Ishga keldim",
+        "🔴 Ishdan ketdim",
+        "Ishdan ketdim",
+    }
+)
+
+
+class MainMenuStateResetMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event, data: dict[str, Any]) -> Any:
+        if getattr(event, "text", None) in MAIN_MENU_TEXTS:
+            state = data.get("state")
+            if state is not None:
+                await state.clear()
+        return await handler(event, data)
 
 
 def _parse_money(value: str, *, whole_only: bool = False) -> Decimal | None:
@@ -161,6 +198,7 @@ def _new_router(
     scheduler: AsyncIOScheduler,
 ) -> Router:
     router = Router(name="ryx-wash")
+    router.message.outer_middleware(MainMenuStateResetMiddleware())
 
     async def find_user(session: AsyncSession, telegram_id: int) -> User | None:
         return await session.scalar(
