@@ -937,7 +937,7 @@ def test_wash_timer_notifies_worker_without_releasing_group_assignment():
                 state,
             )
             await handler(router, "message", "receive_arrival_eta")(
-                RecordingMessage(bot, WORKER_ONE_ID, "25"),
+                RecordingMessage(bot, WORKER_ONE_ID, "25 daqiqa"),
                 state,
             )
             await update_status(
@@ -969,6 +969,37 @@ def test_wash_timer_notifies_worker_without_releasing_group_assignment():
                 worker = await session.get(Worker, WORKER_ONE_ID)
                 assert worker.status == "band"
             assert any("60 daqiqalik yuvish vaqti tugadi" in text for text in bot.messages())
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_arrival_eta_recovers_when_fsm_state_is_missing():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            order_id = (await add_group(sessions, count=1))[0]
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                order.worker_id = WORKER_ONE_ID
+                order.status = "yo'lda"
+                order.route_started_at = datetime(
+                    2026, 8, 30, 8, 30, tzinfo=timezone.utc
+                )
+                await session.commit()
+
+            bot = RecordingBot()
+            message = RecordingMessage(bot, WORKER_ONE_ID, "25 daqiqa")
+            await handler(router, "message", "recover_arrival_eta")(
+                message
+            )
+
+            order = (await load_orders(sessions, [order_id]))[0]
+            assert order.arrival_eta_minutes == 25
+            assert order.arrival_eta_at is not None
+            assert any("ETA saqlandi" in str(text) for text, _ in message.answer_calls)
         finally:
             await engine.dispose()
 

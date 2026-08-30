@@ -1894,11 +1894,10 @@ def _register_user_routes(
                 or not worker
                 or order.status != "yo'lda"
             ):
-                await state.clear()
                 await message.answer(
                     "❌ Buyurtma topilmadi yoki yo'lga chiqish bosqichi yopilgan."
                 )
-                return
+                return False
             order.arrival_eta_minutes = eta_minutes
             arrival_eta_at = now_tashkent() + timedelta(minutes=eta_minutes)
             order.arrival_eta_at = arrival_eta_at
@@ -1928,36 +1927,6 @@ def _register_user_routes(
             reply_markup=worker_status_keyboard(order_id, "arrived"),
         )
         return True
-
-    @router.message(F.text)
-    async def recover_arrival_eta(message: Message) -> None:
-        """Recover ETA input if the in-memory FSM state was lost."""
-        if not message.from_user:
-            return
-        async with sessions() as session:
-            order = await session.scalar(
-                select(Order)
-                .where(
-                    Order.worker_id == message.from_user.id,
-                    Order.status == "yo'lda",
-                    Order.arrival_eta_minutes.is_(None),
-                )
-                .order_by(Order.route_started_at, Order.id)
-                .limit(1)
-            )
-        if order is None:
-            return
-        match = re.fullmatch(
-            r"\s*(\d{1,4})\s*(?:daqiqa|daq|minut|m)?\s*",
-            message.text.lower(),
-        )
-        if not match or not 1 <= int(match.group(1)) <= 1440:
-            await message.answer(
-                "❌ Yetib borish vaqti 1 dan 1440 gacha bo'lgan butun "
-                "daqiqalarda bo'lsin. Masalan: 25"
-            )
-            return
-        await save_arrival_eta(message, order.id, int(match.group(1)))
 
     @router.message(WorkerOrderStates.waiting_plate, F.text)
     async def receive_order_plate(message: Message, state: FSMContext) -> None:
@@ -2185,6 +2154,36 @@ def _register_user_routes(
     @router.message(WorkerCompletionStates.waiting_comment)
     async def require_completion_comment(message: Message) -> None:
         await message.answer("📝 Iltimos, ish bo'yicha qisqa izohni matn shaklida yuboring.")
+
+    @router.message(F.text)
+    async def recover_arrival_eta(message: Message) -> None:
+        """Recover ETA input if the in-memory FSM state was lost."""
+        if not message.from_user:
+            return
+        async with sessions() as session:
+            order = await session.scalar(
+                select(Order)
+                .where(
+                    Order.worker_id == message.from_user.id,
+                    Order.status == "yo'lda",
+                    Order.arrival_eta_minutes.is_(None),
+                )
+                .order_by(Order.route_started_at, Order.id)
+                .limit(1)
+            )
+        if order is None:
+            return
+        match = re.fullmatch(
+            r"\s*(\d{1,4})\s*(?:daqiqa|daq|minut|m)?\s*",
+            message.text.lower(),
+        )
+        if not match or not 1 <= int(match.group(1)) <= 1440:
+            await message.answer(
+                "❌ Yetib borish vaqti 1 dan 1440 gacha bo'lgan butun "
+                "daqiqalarda bo'lsin. Masalan: 25"
+            )
+            return
+        await save_arrival_eta(message, order.id, int(match.group(1)))
 
 
 def register_worker_routes(
