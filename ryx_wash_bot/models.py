@@ -22,6 +22,31 @@ class User(Base):
 
     orders: Mapped[list["Order"]] = relationship(back_populates="customer")
     worker: Mapped["Worker | None"] = relationship(back_populates="user")
+    cars: Mapped[list["CustomerCar"]] = relationship(
+        back_populates="customer", cascade="all, delete-orphan"
+    )
+
+
+class CustomerCar(Base):
+    __tablename__ = "customer_cars"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    customer_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id"), nullable=False, index=True
+    )
+    car_category: Mapped[str] = mapped_column(
+        "kategoriya", String(50), nullable=False
+    )
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
+    plate_number: Mapped[str] = mapped_column(
+        "davlat_raqami", String(30), nullable=False
+    )
+    color: Mapped[str | None] = mapped_column("rang", String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    customer: Mapped[User] = relationship(back_populates="cars")
 
 
 class Worker(Base):
@@ -72,8 +97,13 @@ class Order(Base):
     latitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 7), nullable=True)
     longitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 7), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    car_color: Mapped[str | None] = mapped_column(String(50), nullable=True)
     address: Mapped[str | None] = mapped_column(Text, nullable=True)
     car_photo_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    order_group_id: Mapped[str | None] = mapped_column(
+        String(36), nullable=True, index=True
+    )
+    group_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="yangi")
     queued_offer: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="false"

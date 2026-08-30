@@ -2,6 +2,8 @@ import html
 import logging
 import re
 from decimal import Decimal
+from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
@@ -12,13 +14,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from .catalog import categories, format_price, get_model
+from .catalog import categories, format_price, get_model, get_model_by_name
 from .config import Settings
 from .keyboards import (
     category_keyboard,
     contact_keyboard,
     customer_menu_keyboard,
     director_menu_keyboard,
+    group_mode_keyboard,
     location_keyboard,
     manual_category_keyboard,
     manual_location_keyboard,
@@ -26,10 +29,12 @@ from .keyboards import (
     model_keyboard,
     new_order_assignment_keyboard,
     payment_keyboard,
+    next_car_keyboard,
+    saved_cars_keyboard,
     skip_comment_keyboard,
     worker_menu_keyboard,
 )
-from .models import Order, User
+from .models import CustomerCar, Order, User, Worker
 from .states import ManualOrderStates, OrderStates, RegistrationStates
 from .worker_handlers import register_worker_routes
 
@@ -41,6 +46,7 @@ def _safe(value: object) -> str:
 
 
 UZBEK_PHONE_RE = re.compile(r"^\+998\d{9}$")
+TASHKENT = ZoneInfo("Asia/Tashkent")
 
 
 def _new_router(
@@ -54,6 +60,53 @@ def _new_router(
         return await session.scalar(
             select(User).where(User.telegram_id == telegram_id)
         )
+
+    async def send_group_summary(
+        bot,
+        title: str,
+        customer: User,
+        orders: list[Order],
+        group_id: str,
+    ) -> None:
+        total = sum(int(order.car_price) for order in orders)
+        header = (
+            f"<b>{_safe(title)}</b>\n\n"
+            f"<b>Mijoz:</b> {_safe(customer.name)}\n"
+            f"<b>Telefon:</b> {_safe(customer.phone)}\n"
+            f"<b>Mashinalar:</b> {len(orders)} ta\n"
+            f"<b>Jami:</b> {_safe(format_price(total))}"
+        )
+        lines = [
+            f"{index}. {_safe(order.car_model)} | "
+            f"{_safe(order.plate_number)} | "
+            f"{_safe(format_price(int(order.car_price)))}"
+            for index, order in enumerate(orders, 1)
+        ]
+        full_text = header + "\n\n" + "\n".join(lines)
+        if len(full_text) <= 4000:
+            await bot.send_message(
+                settings.director_id,
+                full_text,
+                reply_markup=group_mode_keyboard(group_id, orders[0].id),
+            )
+            return
+
+        await bot.send_message(
+            settings.director_id,
+            header + "\n\nRo'yxat keyingi xabarlarda davom etadi.",
+            reply_markup=group_mode_keyboard(group_id, orders[0].id),
+        )
+        chunk: list[str] = []
+        chunk_length = 0
+        for line in lines:
+            if chunk and chunk_length + len(line) + 1 > 3800:
+                await bot.send_message(settings.director_id, "\n".join(chunk))
+                chunk = []
+                chunk_length = 0
+            chunk.append(line)
+            chunk_length += len(line) + 1
+        if chunk:
+            await bot.send_message(settings.director_id, "\n".join(chunk))
 
     async def customer_or_reject(message: Message, session: AsyncSession) -> User | None:
         telegram_id = message.from_user.id if message.from_user else None
@@ -200,6 +253,113 @@ def _new_router(
             reply_markup=menu,
         )
 
+    @router.message(F.text == "Buyurtmalar tarixi")
+    async def customer_order_history(message: Message) -> None:
+        async with session_factory() as session:
+            customer = await find_user(session, message.from_user.id)
+            if not customer or customer.rol != "mijoz":
+                await message.answer("Bu bo'lim faqat mijozlar uchun.")
+                return
+            orders = list(
+                (
+                    await session.scalars(
+                        select(Order)
+                        .where(Order.customer_id == customer.telegram_id)
+                        .order_by(Order.created_at.desc(), Order.id.desc())
+                        .limit(100)
+                    )
+                ).all()
+            )
+        if not orders:
+            await message.answer("Sizda hali buyurtmalar yo'q.")
+            return
+
+        date_groups: dict[str, list[Order]] = {}
+        for order in orders:
+            date_key = order.created_at.astimezone(TASHKENT).strftime("%d.%m.%Y")
+            date_groups.setdefault(date_key, []).append(order)
+        parts = ["<b>Buyurtmalar tarixi</b>"]
+        for date_key, dated_orders in date_groups.items():
+            parts.append(f"\n<b>{_safe(date_key)}</b>")
+            grouped: dict[str, list[Order]] = {}
+            for order in dated_orders:
+                key = order.order_group_id or f"single:{order.id}"
+                grouped.setdefault(key, []).append(order)
+            for group_orders in grouped.values():
+                if len(group_orders) > 1:
+                    total = sum(int(order.car_price) for order in group_orders)
+                    parts.append(
+                        f"Guruh buyurtmasi — {_safe(format_price(total))}:"
+                    )
+                for order in reversed(group_orders):
+                    parts.append(
+                        f"• {_safe(order.car_model)} | "
+                        f"{_safe(order.plate_number)} | "
+                        f"{_safe(order.status)} | "
+                        f"{_safe(format_price(int(order.car_price)))}"
+                    )
+        history_text = "\n".join(parts)
+        if len(history_text) > 4000:
+            history_text = history_text[:3950] + "\n\n… faqat so'nggi buyurtmalar ko'rsatildi."
+        await message.answer(history_text)
+
+    @router.message(F.text == "Statistika")
+    async def director_statistics(message: Message) -> None:
+        async with session_factory() as session:
+            director = await find_user(session, message.from_user.id)
+            if not director or director.rol != "direktor":
+                await message.answer("Bu bo'lim faqat direktor uchun.")
+                return
+            rows = (
+                await session.execute(
+                    select(Order, Worker)
+                    .outerjoin(Worker, Order.worker_id == Worker.user_id)
+                    .where(Order.status == "yakunlandi")
+                    .order_by(Order.completed_at)
+                )
+            ).all()
+        if not rows:
+            await message.answer("Hali yakunlangan buyurtmalar yo'q.")
+            return
+        total_revenue = sum(Decimal(order.car_price) for order, _worker in rows)
+        worker_stats: dict[int, dict[str, object]] = {}
+        for order, worker in rows:
+            if not worker:
+                continue
+            stats = worker_stats.setdefault(
+                worker.user_id,
+                {
+                    "name": worker.name,
+                    "cars": 0,
+                    "share": Decimal("0"),
+                },
+            )
+            stats["cars"] = int(stats["cars"]) + 1
+            stats["share"] = Decimal(stats["share"]) + (
+                Decimal(order.car_price) * Decimal(worker.share_percent) / Decimal("100")
+            )
+        lines = [
+            "<b>Umumiy statistika</b>",
+            f"Yuvilgan mashinalar: <b>{len(rows)}</b>",
+            f"Daromad: <b>{_safe(format_price(int(total_revenue)))}</b>",
+            "",
+            "<b>Ishchilar:</b>",
+        ]
+        worker_lines = []
+        for stats in worker_stats.values():
+            worker_lines.append(
+                f"• {_safe(stats['name'])}: {stats['cars']} ta mashina, "
+                f"ulushi {_safe(format_price(int(Decimal(stats['share']))))}"
+            )
+        current = "\n".join(lines)
+        for line in worker_lines:
+            if len(current) + len(line) + 1 > 3800:
+                await message.answer(current)
+                current = "<b>Ishchilar (davomi):</b>\n" + line
+            else:
+                current += "\n" + line
+        await message.answer(current)
+
     @router.message(F.text == "Qo'lda buyurtma qo'shish")
     async def start_manual_order(message: Message, state: FSMContext) -> None:
         async with session_factory() as session:
@@ -235,15 +395,148 @@ def _new_router(
                 "bo'lishi kerak. Masalan: +998901234567"
             )
             return
-        await state.update_data(customer_phone=phone)
-        await state.set_state(ManualOrderStates.waiting_car_category)
-        await message.answer(
-            "Mashina kategoriyasini tanlang:",
+        data = await state.get_data()
+        async with session_factory() as session:
+            customer = await session.scalar(
+                select(User)
+                .where(
+                    func.regexp_replace(User.phone, "[^0-9]", "", "g")
+                    == phone.lstrip("+"),
+                    User.rol == "mijoz",
+                )
+                .order_by(User.created_at, User.telegram_id)
+                .limit(1)
+            )
+            if customer is None:
+                lowest_id = await session.scalar(select(func.min(User.telegram_id)))
+                synthetic_id = (
+                    -1 if lowest_id is None or lowest_id >= 0 else lowest_id - 1
+                )
+                customer = User(
+                    telegram_id=synthetic_id,
+                    name=data["customer_name"],
+                    phone=phone,
+                    rol="mijoz",
+                )
+                session.add(customer)
+                await session.flush()
+            else:
+                customer.name = data["customer_name"]
+                customer.phone = phone
+            cars = list(
+                (
+                    await session.scalars(
+                        select(CustomerCar)
+                        .where(CustomerCar.customer_id == customer.telegram_id)
+                        .order_by(CustomerCar.created_at, CustomerCar.id)
+                    )
+                ).all()
+            )
+            customer_id = customer.telegram_id
+            await session.commit()
+        await state.update_data(customer_phone=phone, customer_id=customer_id)
+        if cars:
+            await state.set_state(ManualOrderStates.waiting_car_choice)
+            await message.answer(
+                "Mijozning saqlangan mashinasini tanlang yoki yangi mashina qo'shing:",
+                reply_markup=saved_cars_keyboard(cars, "manual"),
+            )
+        else:
+            await state.set_state(ManualOrderStates.waiting_new_category)
+            await message.answer(
+                "Mashina kategoriyasini tanlang:",
+                reply_markup=manual_category_keyboard(),
+            )
+
+    async def append_manual_car(
+        state: FSMContext,
+        car: dict,
+        car_photo_id: str,
+    ) -> None:
+        data = await state.get_data()
+        cars = list(data.get("cars", []))
+        cars.append({**car, "car_photo_id": car_photo_id})
+        await state.update_data(cars=cars, current_car=None)
+
+    @router.callback_query(
+        ManualOrderStates.waiting_car_choice,
+        F.data.startswith("manual_saved_car:"),
+    )
+    async def choose_saved_manual_car(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        car_id = int(callback.data.split(":", 1)[1])
+        data = await state.get_data()
+        async with session_factory() as session:
+            car = await session.get(CustomerCar, car_id)
+            if not car or car.customer_id != data.get("customer_id"):
+                await callback.answer("Mashina topilmadi.", show_alert=True)
+                return
+        model = get_model_by_name(car.car_category, car.model)
+        if model is None:
+            await callback.answer(
+                "Bu mashina katalogda topilmadi. Yangi mashina qo'shing.",
+                show_alert=True,
+            )
+            return
+        await state.update_data(
+            current_car={
+                "car_category": car.car_category,
+                "car_model": car.model,
+                "car_price": model.price,
+                "plate_number": car.plate_number,
+                "color": car.color,
+            }
+        )
+        await state.set_state(ManualOrderStates.waiting_car_photo)
+        await callback.answer()
+        await callback.message.edit_text(
+            f"{_safe(car.model)} ({_safe(car.plate_number)}) tanlandi."
+        )
+        await callback.message.answer(
+            "Shu mashinaning referens rasmini yuboring (majburiy):"
+        )
+
+    @router.callback_query(
+        ManualOrderStates.waiting_car_choice,
+        F.data.startswith("manual_cars_page:"),
+    )
+    async def page_manual_cars(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        page = int(callback.data.split(":", 1)[1])
+        data = await state.get_data()
+        async with session_factory() as session:
+            cars = list(
+                (
+                    await session.scalars(
+                        select(CustomerCar)
+                        .where(CustomerCar.customer_id == data["customer_id"])
+                        .order_by(CustomerCar.created_at, CustomerCar.id)
+                    )
+                ).all()
+            )
+        await callback.message.edit_reply_markup(
+            reply_markup=saved_cars_keyboard(cars, "manual", page=page)
+        )
+        await callback.answer()
+
+    @router.callback_query(
+        ManualOrderStates.waiting_car_choice,
+        F.data == "manual_new_car",
+    )
+    async def choose_new_manual_car(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        await state.set_state(ManualOrderStates.waiting_new_category)
+        await callback.answer()
+        await callback.message.edit_text(
+            "Yangi mashina kategoriyasini tanlang:",
             reply_markup=manual_category_keyboard(),
         )
 
     @router.callback_query(
-        ManualOrderStates.waiting_car_category,
+        ManualOrderStates.waiting_new_category,
         F.data.startswith("manual_category:"),
     )
     async def manual_car_category(
@@ -254,7 +547,7 @@ def _new_router(
             await callback.answer("Kategoriya topilmadi.", show_alert=True)
             return
         await state.update_data(car_category=category)
-        await state.set_state(ManualOrderStates.waiting_car_model)
+        await state.set_state(ManualOrderStates.waiting_new_model)
         await callback.answer()
         await callback.message.edit_text(
             f"{_safe(category)} kategoriyasidan modelni tanlang:",
@@ -262,7 +555,7 @@ def _new_router(
         )
 
     @router.callback_query(
-        ManualOrderStates.waiting_car_model,
+        ManualOrderStates.waiting_new_model,
         F.data.startswith("manual_model:"),
     )
     async def manual_car_model(
@@ -294,25 +587,107 @@ def _new_router(
             )
             return
         await state.update_data(plate_number=plate)
+        await state.set_state(ManualOrderStates.waiting_new_color)
+        await message.answer(
+            "Mashina rangini yozing yoki o'tkazib yuboring (ixtiyoriy):",
+            reply_markup=skip_comment_keyboard(),
+        )
+
+    @router.message(ManualOrderStates.waiting_new_color, F.text)
+    async def manual_car_color(message: Message, state: FSMContext) -> None:
+        color = None if message.text.strip() == "O'tkazib yuborish" else message.text.strip()
+        if color and len(color) > 50:
+            await message.answer("Rang 50 belgidan oshmasin.")
+            return
+        data = await state.get_data()
+        async with session_factory() as session:
+            car = CustomerCar(
+                customer_id=data["customer_id"],
+                car_category=data["car_category"],
+                model=data["car_model"],
+                plate_number=data["plate_number"],
+                color=color,
+            )
+            session.add(car)
+            await session.commit()
+        await state.update_data(
+            current_car={
+                "car_category": data["car_category"],
+                "car_model": data["car_model"],
+                "car_price": data["car_price"],
+                "plate_number": data["plate_number"],
+                "color": color,
+            }
+        )
         await state.set_state(ManualOrderStates.waiting_car_photo)
         await message.answer(
             "Mashina rasmini yuboring. Rasm majburiy, keyingi bosqichga "
-            "rasmsiz o'tib bo'lmaydi."
+            "rasmsiz o'tib bo'lmaydi.",
+            reply_markup=ReplyKeyboardRemove(),
         )
 
     @router.message(ManualOrderStates.waiting_car_photo, F.photo)
     async def manual_car_photo(message: Message, state: FSMContext) -> None:
-        await state.update_data(car_photo_id=message.photo[-1].file_id)
-        await state.set_state(ManualOrderStates.waiting_payment)
+        data = await state.get_data()
+        current_car = data.get("current_car")
+        if not current_car:
+            await message.answer("Mashina ma'lumotlari topilmadi. /cancel bosing.")
+            return
+        await append_manual_car(state, current_car, message.photo[-1].file_id)
+        await state.set_state(ManualOrderStates.waiting_next_car)
         await message.answer(
-            "To'lov usulini tanlang:",
-            reply_markup=payment_keyboard(),
+            "Mashina buyurtmaga qo'shildi. Yana mashina qo'shasizmi?",
+            reply_markup=next_car_keyboard("manual"),
         )
 
     @router.message(ManualOrderStates.waiting_car_photo)
     async def manual_require_car_photo(message: Message) -> None:
         await message.answer(
             "Mashina rasmi majburiy. Iltimos, Telegram orqali bitta rasm yuboring."
+        )
+
+    @router.callback_query(
+        ManualOrderStates.waiting_next_car,
+        F.data == "manual_add_car",
+    )
+    async def add_manual_car(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        data = await state.get_data()
+        async with session_factory() as session:
+            cars = list(
+                (
+                    await session.scalars(
+                        select(CustomerCar)
+                        .where(CustomerCar.customer_id == data["customer_id"])
+                        .order_by(CustomerCar.created_at, CustomerCar.id)
+                    )
+                ).all()
+            )
+        await state.set_state(ManualOrderStates.waiting_car_choice)
+        await callback.answer()
+        await callback.message.edit_text(
+            "Mavjud mashinadan tanlang yoki yangi mashina qo'shing:",
+            reply_markup=saved_cars_keyboard(cars, "manual"),
+        )
+
+    @router.callback_query(
+        ManualOrderStates.waiting_next_car,
+        F.data == "manual_finish_cars",
+    )
+    async def finish_manual_cars(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        data = await state.get_data()
+        if not data.get("cars"):
+            await callback.answer("Avval mashina qo'shing.", show_alert=True)
+            return
+        await state.set_state(ManualOrderStates.waiting_payment)
+        await callback.answer()
+        await callback.message.edit_text("Mashinalar tanlandi.")
+        await callback.message.answer(
+            "To'lov usulini tanlang:",
+            reply_markup=payment_keyboard(),
         )
 
     @router.callback_query(
@@ -387,96 +762,97 @@ def _new_router(
     ) -> None:
         data = await state.get_data()
         async with session_factory() as session:
-            customer = await session.scalar(
-                select(User)
-                .where(
-                    func.regexp_replace(User.phone, "[^0-9]", "", "g")
-                    == data["customer_phone"].lstrip("+"),
-                    User.rol == "mijoz",
-                )
-                .order_by(User.created_at, User.telegram_id)
-                .limit(1)
-            )
+            customer = await session.get(User, data["customer_id"])
             if customer is None:
-                lowest_id = await session.scalar(select(func.min(User.telegram_id)))
-                synthetic_id = -1 if lowest_id is None or lowest_id >= 0 else lowest_id - 1
-                customer = User(
-                    telegram_id=synthetic_id,
-                    name=data["customer_name"],
-                    phone=data["customer_phone"],
-                    rol="mijoz",
+                await message.answer("Mijoz topilmadi. Qayta boshlang.")
+                return
+            cars = data["cars"]
+            group_id = str(uuid4()) if len(cars) > 1 else None
+            orders: list[Order] = []
+            for car in cars:
+                order = Order(
+                    customer_id=customer.telegram_id,
+                    car_category=car["car_category"],
+                    car_model=car["car_model"],
+                    car_price=Decimal(str(car["car_price"])),
+                    plate_number=car["plate_number"],
+                    car_color=car.get("color"),
+                    payment_method=data["payment_method"],
+                    latitude=(
+                        Decimal(str(data["latitude"]))
+                        if data.get("latitude") is not None
+                        else None
+                    ),
+                    longitude=(
+                        Decimal(str(data["longitude"]))
+                        if data.get("longitude") is not None
+                        else None
+                    ),
+                    address=data.get("address"),
+                    car_photo_id=car["car_photo_id"],
+                    comment=comment,
+                    order_group_id=group_id,
+                    status="yangi",
                 )
-                session.add(customer)
-                await session.flush()
-            else:
-                customer.name = data["customer_name"]
-                customer.phone = data["customer_phone"]
-
-            order = Order(
-                customer_id=customer.telegram_id,
-                car_category=data["car_category"],
-                car_model=data["car_model"],
-                car_price=Decimal(str(data["car_price"])),
-                plate_number=data["plate_number"],
-                payment_method=data["payment_method"],
-                latitude=(
-                    Decimal(str(data["latitude"]))
-                    if data.get("latitude") is not None
-                    else None
-                ),
-                longitude=(
-                    Decimal(str(data["longitude"]))
-                    if data.get("longitude") is not None
-                    else None
-                ),
-                address=data.get("address"),
-                car_photo_id=data["car_photo_id"],
-                comment=comment,
-                status="yangi",
-            )
-            session.add(order)
+                session.add(order)
+                orders.append(order)
             await session.commit()
-            await session.refresh(order)
+            for order in orders:
+                await session.refresh(order)
 
-            director_text = (
-                f"<b>Qo'lda kiritilgan buyurtma #{order.id}</b>\n\n"
-                f"<b>Mijoz:</b> {_safe(customer.name)}\n"
-                f"<b>Telefon:</b> {_safe(customer.phone)}\n"
-                f"<b>Kategoriya:</b> {_safe(order.car_category)}\n"
-                f"<b>Model:</b> {_safe(order.car_model)}\n"
-                f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
-                f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-                f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
-                f"<b>Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
-                f"<b>Izoh:</b> {_safe(order.comment or '—')}"
-            )
             bot = message.bot
-            await bot.send_message(
-                settings.director_id,
-                director_text,
-                reply_markup=new_order_assignment_keyboard(order.id),
-            )
-            if order.latitude is not None and order.longitude is not None:
+            if len(orders) == 1:
+                order = orders[0]
+                director_text = (
+                    f"<b>Qo'lda kiritilgan buyurtma #{order.id}</b>\n\n"
+                    f"<b>Mijoz:</b> {_safe(customer.name)}\n"
+                    f"<b>Telefon:</b> {_safe(customer.phone)}\n"
+                    f"<b>Kategoriya:</b> {_safe(order.car_category)}\n"
+                    f"<b>Model:</b> {_safe(order.car_model)}\n"
+                    f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
+                    f"<b>Rang:</b> {_safe(order.car_color or '—')}\n"
+                    f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                    f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
+                    f"<b>Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
+                    f"<b>Izoh:</b> {_safe(order.comment or '—')}"
+                )
+                await bot.send_message(
+                    settings.director_id,
+                    director_text,
+                    reply_markup=new_order_assignment_keyboard(order.id),
+                )
+                await bot.send_photo(
+                    settings.director_id,
+                    order.car_photo_id,
+                    caption=f"Buyurtma #{order.id} mashina rasmi",
+                )
+            else:
+                await send_group_summary(
+                    bot,
+                    "Qo'lda kiritilgan guruh buyurtmasi",
+                    customer,
+                    orders,
+                    group_id,
+                )
+            if orders[0].latitude is not None and orders[0].longitude is not None:
                 await bot.send_location(
                     settings.director_id,
-                    latitude=float(order.latitude),
-                    longitude=float(order.longitude),
+                    latitude=float(orders[0].latitude),
+                    longitude=float(orders[0].longitude),
                 )
             else:
                 await bot.send_message(
                     settings.director_id,
-                    f"<b>Qo'lda kiritilgan manzil:</b> {_safe(order.address)}",
+                    f"<b>Qo'lda kiritilgan manzil:</b> {_safe(orders[0].address)}",
                     parse_mode=ParseMode.HTML,
                 )
-            await bot.send_photo(
-                settings.director_id,
-                order.car_photo_id,
-                caption=f"Buyurtma #{order.id} mashina rasmi",
-            )
 
         await state.clear()
         await message.answer(
-            f"Buyurtma #{order.id} yaratildi. Endi uni ishchiga yuborishingiz mumkin.",
+            (
+                f"{len(orders)} ta mashina uchun buyurtma yaratildi. "
+                "Endi taqsimlash usulini tanlang."
+            ),
             reply_markup=director_menu_keyboard(),
         )
 
@@ -494,25 +870,147 @@ def _new_router(
     @router.message(F.text == "Yangi buyurtma")
     async def new_order(message: Message, state: FSMContext) -> None:
         async with session_factory() as session:
-            if await customer_or_reject(message, session) is None:
+            customer = await customer_or_reject(message, session)
+            if customer is None:
                 return
+            cars = list(
+                (
+                    await session.scalars(
+                        select(CustomerCar)
+                        .where(CustomerCar.customer_id == customer.telegram_id)
+                        .order_by(CustomerCar.created_at, CustomerCar.id)
+                    )
+                ).all()
+            )
         await state.clear()
-        await message.answer(
-            "Mashina kategoriyasini tanlang:",
+        if cars:
+            await state.set_state(OrderStates.waiting_car_choice)
+            await message.answer(
+                "Saqlangan mashinangiz bor. Mavjud mashinadan tanlang "
+                "yoki yangi mashina qo'shing:",
+                reply_markup=saved_cars_keyboard(cars, "customer"),
+            )
+        else:
+            await state.set_state(OrderStates.waiting_car_category)
+            await message.answer(
+                "Mashina kategoriyasini tanlang:",
+                reply_markup=category_keyboard(),
+            )
+
+    async def append_customer_car(
+        state: FSMContext,
+        car_category: str,
+        car_model: str,
+        car_price: int,
+        plate_number: str,
+        color: str | None,
+    ) -> None:
+        data = await state.get_data()
+        cars = list(data.get("cars", []))
+        cars.append(
+            {
+                "car_category": car_category,
+                "car_model": car_model,
+                "car_price": car_price,
+                "plate_number": plate_number,
+                "color": color,
+            }
+        )
+        await state.update_data(cars=cars)
+
+    @router.callback_query(
+        OrderStates.waiting_car_choice,
+        F.data.startswith("customer_saved_car:"),
+    )
+    async def choose_saved_customer_car(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        car_id = int(callback.data.split(":", 1)[1])
+        async with session_factory() as session:
+            car = await session.get(CustomerCar, car_id)
+            if not car or car.customer_id != callback.from_user.id:
+                await callback.answer("Mashina topilmadi.", show_alert=True)
+                return
+        model = get_model_by_name(car.car_category, car.model)
+        if model is None:
+            await callback.answer(
+                "Bu mashina katalogda topilmadi. Yangi mashina qo'shing.",
+                show_alert=True,
+            )
+            return
+        await append_customer_car(
+            state,
+            car.car_category,
+            car.model,
+            model.price,
+            car.plate_number,
+            car.color,
+        )
+        await state.set_state(OrderStates.waiting_next_car)
+        await callback.answer()
+        await callback.message.edit_text(
+            f"{_safe(car.model)} ({_safe(car.plate_number)}) tanlandi.",
+            reply_markup=next_car_keyboard("customer"),
+        )
+
+    @router.callback_query(
+        OrderStates.waiting_car_choice,
+        F.data.startswith("customer_cars_page:"),
+    )
+    async def page_customer_cars(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        page = int(callback.data.split(":", 1)[1])
+        async with session_factory() as session:
+            cars = list(
+                (
+                    await session.scalars(
+                        select(CustomerCar)
+                        .where(CustomerCar.customer_id == callback.from_user.id)
+                        .order_by(CustomerCar.created_at, CustomerCar.id)
+                    )
+                ).all()
+            )
+        await callback.message.edit_reply_markup(
+            reply_markup=saved_cars_keyboard(cars, "customer", page=page)
+        )
+        await callback.answer()
+
+    @router.callback_query(
+        OrderStates.waiting_car_choice,
+        F.data == "customer_new_car",
+    )
+    async def choose_new_customer_car(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        await state.set_state(OrderStates.waiting_car_category)
+        await callback.answer()
+        await callback.message.edit_text(
+            "Yangi mashina kategoriyasini tanlang:",
             reply_markup=category_keyboard(),
         )
 
-    @router.callback_query(F.data.startswith("category:"))
+    @router.callback_query(
+        OrderStates.waiting_car_category,
+        F.data.startswith("category:"),
+    )
     async def choose_category(callback: CallbackQuery, state: FSMContext) -> None:
         category = callback.data.split(":", 1)[1]
+        if category not in categories():
+            await callback.answer("Kategoriya topilmadi.", show_alert=True)
+            return
         await state.update_data(car_category=category)
+        await state.set_state(OrderStates.waiting_car_model)
         await callback.answer()
         await callback.message.edit_text(
             f"{_safe(category)} kategoriyasidan modelni tanlang:",
             reply_markup=model_keyboard(category),
         )
 
-    @router.callback_query(F.data.startswith("model:"))
+    @router.callback_query(
+        OrderStates.waiting_car_model,
+        F.data.startswith("model:"),
+    )
     async def choose_model(callback: CallbackQuery, state: FSMContext) -> None:
         model = get_model(callback.data.split(":", 1)[1])
         if model is None:
@@ -540,8 +1038,86 @@ def _new_router(
             return
 
         await state.update_data(plate_number=plate)
-        await state.set_state(OrderStates.waiting_payment)
+        await state.set_state(OrderStates.waiting_car_color)
         await message.answer(
+            "Mashina rangini yozing yoki o'tkazib yuboring (ixtiyoriy):",
+            reply_markup=skip_comment_keyboard(),
+        )
+
+    @router.message(OrderStates.waiting_car_color, F.text)
+    async def receive_car_color(message: Message, state: FSMContext) -> None:
+        color = None if message.text.strip() == "O'tkazib yuborish" else message.text.strip()
+        if color and len(color) > 50:
+            await message.answer("Rang 50 belgidan oshmasin.")
+            return
+        data = await state.get_data()
+        async with session_factory() as session:
+            customer = await find_user(session, message.from_user.id)
+            if not customer:
+                await message.answer("Mijoz ma'lumotlari topilmadi.")
+                return
+            car = CustomerCar(
+                customer_id=customer.telegram_id,
+                car_category=data["car_category"],
+                model=data["car_model"],
+                plate_number=data["plate_number"],
+                color=color,
+            )
+            session.add(car)
+            await session.commit()
+        await append_customer_car(
+            state,
+            data["car_category"],
+            data["car_model"],
+            data["car_price"],
+            data["plate_number"],
+            color,
+        )
+        await state.set_state(OrderStates.waiting_next_car)
+        await message.answer(
+            "Mashina buyurtmaga qo'shildi. Yana mashina qo'shasizmi?",
+            reply_markup=next_car_keyboard("customer"),
+        )
+
+    @router.callback_query(
+        OrderStates.waiting_next_car,
+        F.data == "customer_add_car",
+    )
+    async def add_customer_car(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        await state.set_state(OrderStates.waiting_car_choice)
+        async with session_factory() as session:
+            cars = list(
+                (
+                    await session.scalars(
+                        select(CustomerCar)
+                        .where(CustomerCar.customer_id == callback.from_user.id)
+                        .order_by(CustomerCar.created_at, CustomerCar.id)
+                    )
+                ).all()
+            )
+        await callback.answer()
+        await callback.message.edit_text(
+            "Mavjud mashinadan tanlang yoki yangi mashina qo'shing:",
+            reply_markup=saved_cars_keyboard(cars, "customer"),
+        )
+
+    @router.callback_query(
+        OrderStates.waiting_next_car,
+        F.data == "customer_finish_cars",
+    )
+    async def finish_customer_cars(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        data = await state.get_data()
+        if not data.get("cars"):
+            await callback.answer("Avval mashina tanlang.", show_alert=True)
+            return
+        await state.set_state(OrderStates.waiting_payment)
+        await callback.answer()
+        await callback.message.edit_text("Mashinalar tanlandi.")
+        await callback.message.answer(
             "To'lov usulini tanlang:",
             reply_markup=payment_keyboard(),
         )
@@ -593,54 +1169,76 @@ def _new_router(
                 )
                 return
 
-            order = Order(
-                customer_id=user.telegram_id,
-                car_category=data["car_category"],
-                car_model=data["car_model"],
-                car_price=Decimal(str(data["car_price"])),
-                plate_number=data["plate_number"],
-                payment_method=data["payment_method"],
-                latitude=Decimal(str(data["latitude"])),
-                longitude=Decimal(str(data["longitude"])),
-                comment=comment,
-                status="yangi",
-            )
-            session.add(order)
+            cars = data["cars"]
+            group_id = str(uuid4()) if len(cars) > 1 else None
+            orders: list[Order] = []
+            for car in cars:
+                order = Order(
+                    customer_id=user.telegram_id,
+                    car_category=car["car_category"],
+                    car_model=car["car_model"],
+                    car_price=Decimal(str(car["car_price"])),
+                    plate_number=car["plate_number"],
+                    car_color=car.get("color"),
+                    payment_method=data["payment_method"],
+                    latitude=Decimal(str(data["latitude"])),
+                    longitude=Decimal(str(data["longitude"])),
+                    comment=comment,
+                    order_group_id=group_id,
+                    status="yangi",
+                )
+                session.add(order)
+                orders.append(order)
             await session.commit()
-            await session.refresh(order)
-
-            director_text = (
-                f"<b>Yangi buyurtma #{order.id}</b>\n\n"
-                f"<b>Mijoz:</b> {_safe(user.name)}\n"
-                f"<b>Telefon:</b> {_safe(user.phone)}\n"
-                f"<b>Kategoriya:</b> {_safe(order.car_category)}\n"
-                f"<b>Model:</b> {_safe(order.car_model)}\n"
-                f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
-                f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-                f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
-                f"<b>Izoh:</b> {_safe(order.comment or '—')}"
-            )
+            for order in orders:
+                await session.refresh(order)
 
             try:
                 bot = message.bot
-                director_message = await bot.send_message(
-                    settings.director_id,
-                    director_text,
-                    reply_markup=new_order_assignment_keyboard(order.id),
-                )
+                if len(orders) == 1:
+                    order = orders[0]
+                    director_text = (
+                        f"<b>Yangi buyurtma #{order.id}</b>\n\n"
+                        f"<b>Mijoz:</b> {_safe(user.name)}\n"
+                        f"<b>Telefon:</b> {_safe(user.phone)}\n"
+                        f"<b>Kategoriya:</b> {_safe(order.car_category)}\n"
+                        f"<b>Model:</b> {_safe(order.car_model)}\n"
+                        f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
+                        f"<b>Rang:</b> {_safe(order.car_color or '—')}\n"
+                        f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                        f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
+                        f"<b>Izoh:</b> {_safe(order.comment or '—')}"
+                    )
+                    await bot.send_message(
+                        settings.director_id,
+                        director_text,
+                        reply_markup=new_order_assignment_keyboard(order.id),
+                    )
+                else:
+                    await send_group_summary(
+                        bot,
+                        "Yangi guruh buyurtmasi",
+                        user,
+                        orders,
+                        group_id,
+                    )
                 await bot.send_location(
                     settings.director_id,
-                    latitude=float(order.latitude),
-                    longitude=float(order.longitude),
+                    latitude=float(orders[0].latitude),
+                    longitude=float(orders[0].longitude),
                 )
             except Exception:
                 logger.exception(
-                    "Could not notify director about order %s", order.id
+                    "Could not notify director about order group %s",
+                    group_id or orders[0].id,
                 )
 
         await state.clear()
         await message.answer(
-            "So'rovingiz qabul qilindi. Tez orada siz bilan bog'lanamiz.",
+            (
+                f"{len(orders)} ta mashina uchun so'rovingiz qabul qilindi. "
+                "Tez orada siz bilan bog'lanamiz."
+            ),
             reply_markup=customer_menu_keyboard(),
         )
 

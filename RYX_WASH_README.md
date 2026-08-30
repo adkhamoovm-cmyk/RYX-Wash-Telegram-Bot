@@ -68,3 +68,19 @@ The initial vehicle catalog and prices are in `ryx_wash_bot/catalog.py`.
 - The reference car photo is stored separately from the worker's before/after
   completion photos and is shown to the worker after accepting the order.
 - Created orders reuse the existing worker assignment and queue controls.
+
+## Saved cars and grouped orders
+
+- Every customer can keep multiple vehicles in `customer_cars`, including the
+  catalog model, plate number, and optional color.
+- Customer and director order flows can reuse a saved vehicle or add a new one.
+  Large saved-car collections are paginated in Telegram.
+- A single request can contain any number of cars. Payment, location/address,
+  and comment are collected once and copied to each per-car order row.
+- Multi-car requests share an `order_group_id`. Each car remains an independent
+  order for status, revenue, worker share, cancellation, photos, and reports.
+- The director can assign the whole group to one worker (the existing FIFO queue
+  opens cars sequentially) or split cars across workers with the normal
+  assignment controls.
+- **Buyurtmalar tarixi** groups a customer's cars by date and group. Director
+  **Statistika** counts every completed car and its worker share separately.

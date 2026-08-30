@@ -13,6 +13,7 @@ def contact_keyboard() -> ReplyKeyboardMarkup:
 def customer_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.add(KeyboardButton(text="Yangi buyurtma"))
+    builder.add(KeyboardButton(text="Buyurtmalar tarixi"))
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -20,6 +21,7 @@ def director_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.add(KeyboardButton(text="Ishchi qo'shish"))
     builder.add(KeyboardButton(text="Qo'lda buyurtma qo'shish"))
+    builder.add(KeyboardButton(text="Statistika"))
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -65,6 +67,76 @@ def manual_model_keyboard(category: str):
         builder.button(
             text=f"{model.name} — {format_price(model.price)}",
             callback_data=f"manual_model:{model.id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def saved_cars_keyboard(
+    cars: list,
+    prefix: str,
+    page: int = 0,
+    page_size: int = 8,
+):
+    builder = InlineKeyboardBuilder()
+    total_pages = max(1, (len(cars) + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    for car in cars[start : start + page_size]:
+        label = f"{car.model} | {car.plate_number}"
+        if len(label) > 60:
+            label = label[:57] + "..."
+        builder.button(text=label, callback_data=f"{prefix}_saved_car:{car.id}")
+    if page > 0:
+        builder.button(
+            text="⬅️ Oldingi",
+            callback_data=f"{prefix}_cars_page:{page - 1}",
+        )
+    if page + 1 < total_pages:
+        builder.button(
+            text="Keyingi ➡️",
+            callback_data=f"{prefix}_cars_page:{page + 1}",
+        )
+    builder.button(text="Yangi mashina qo'shish", callback_data=f"{prefix}_new_car")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def next_car_keyboard(prefix: str):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Yana mashina qo'shish",
+        callback_data=f"{prefix}_add_car",
+    )
+    builder.button(
+        text="Davom etish",
+        callback_data=f"{prefix}_finish_cars",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def group_mode_keyboard(group_id: str, lead_order_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Barchasini bitta ishchiga berish",
+        callback_data=f"group_single:{group_id}:{lead_order_id}",
+    )
+    builder.button(
+        text="Mashinalarni turli ishchilarga bo'lib berish",
+        callback_data=f"group_split:{group_id}:{lead_order_id}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def group_workers_keyboard(lead_order_id: int, workers: list):
+    builder = InlineKeyboardBuilder()
+    for worker in workers:
+        state = "bo'sh" if worker.status == "bo'sh" else "band"
+        builder.button(
+            text=f"{worker.name} ({state})",
+            callback_data=f"group_worker:{lead_order_id}:{worker.user_id}",
         )
     builder.adjust(1)
     return builder.as_markup()

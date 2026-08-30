@@ -36,5 +36,16 @@ def get_model(model_id: str) -> CarModel | None:
     return next((model for model in CAR_MODELS if model.id == model_id), None)
 
 
+def get_model_by_name(category: str, name: str) -> CarModel | None:
+    return next(
+        (
+            model
+            for model in CAR_MODELS
+            if model.category == category and model.name == name
+        ),
+        None,
+    )
+
+
 def format_price(price: int) -> str:
     return f"{price:,}".replace(",", " ") + " so'm"

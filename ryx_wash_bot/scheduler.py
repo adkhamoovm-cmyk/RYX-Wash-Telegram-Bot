@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot
 from apscheduler.jobstores.base import JobLookupError
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .config import Settings
@@ -93,6 +94,22 @@ async def expire_worker_offer(order_id: int) -> None:
         order.queued_offer = False
         order.queue_offer_worker_id = None
         order.queue_prompted_at = None
+        if order.group_mode == "single" and order.order_group_id:
+            siblings = list(
+                (
+                    await session.scalars(
+                        select(Order).where(
+                            Order.order_group_id == order.order_group_id,
+                            Order.id != order.id,
+                            Order.status == "navbatda",
+                        )
+                    )
+                ).all()
+            )
+            for sibling in siblings:
+                sibling.worker_id = None
+                sibling.queue_offer_worker_id = None
+                sibling.queue_prompted_at = None
         await session.commit()
 
     await _bot.send_message(

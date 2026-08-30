@@ -45,6 +45,18 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS queue_prompted_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS address TEXT,
                     ADD COLUMN IF NOT EXISTS car_photo_id VARCHAR(255)
+                    ,
+                    ADD COLUMN IF NOT EXISTS car_color VARCHAR(50),
+                    ADD COLUMN IF NOT EXISTS order_group_id VARCHAR(36),
+                    ADD COLUMN IF NOT EXISTS group_mode VARCHAR(20)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_orders_order_group_id
+                ON orders (order_group_id)
                 """
             )
         )

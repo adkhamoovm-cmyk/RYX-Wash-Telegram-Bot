@@ -7,7 +7,12 @@ class RegistrationStates(StatesGroup):
 
 
 class OrderStates(StatesGroup):
+    waiting_car_choice = State()
+    waiting_car_category = State()
+    waiting_car_model = State()
     waiting_plate = State()
+    waiting_car_color = State()
+    waiting_next_car = State()
     waiting_payment = State()
     waiting_location = State()
     waiting_comment = State()
@@ -16,6 +21,11 @@ class OrderStates(StatesGroup):
 class ManualOrderStates(StatesGroup):
     waiting_customer_name = State()
     waiting_customer_phone = State()
+    waiting_car_choice = State()
+    waiting_new_category = State()
+    waiting_new_model = State()
+    waiting_new_color = State()
+    waiting_next_car = State()
     waiting_car_category = State()
     waiting_car_model = State()
     waiting_plate = State()
