@@ -104,38 +104,38 @@ async def build_financial_report(
     period_end = end - timedelta(microseconds=1)
     filter_label = worker.name if worker else "Barcha ishchilar"
     header = (
-        "<b>Moliyaviy hisobot</b>\n\n"
+        "<b>📊 Moliyaviy hisobot</b>\n\n"
         f"<b>Davr:</b> {start.astimezone(TASHKENT):%d.%m.%Y} — "
         f"{period_end.astimezone(TASHKENT):%d.%m.%Y}\n"
         f"<b>Filtr:</b> {_safe(filter_label)}\n\n"
-        f"<b>Umumiy kirim:</b> {_safe(format_price(int(revenue)))}\n"
-        f"• Naqd: {_safe(format_price(int(cash)))}\n"
-        f"• Karta: {_safe(format_price(int(card)))}\n"
-        f"<b>Umumiy chiqim:</b> {_safe(format_price(int(expense_total)))}\n"
-        f"<b>Sof foyda:</b> {_safe(format_price(int(net_profit)))}\n"
-        f"<b>Yuvilgan mashinalar:</b> {len(orders)} ta\n"
-        f"<b>Bekor qilingan buyurtmalar:</b> {len(cancellations)} ta"
+        f"<b>💰 Umumiy kirim:</b> {_safe(format_price(int(revenue)))}\n"
+        f"• 💵 Naqd: {_safe(format_price(int(cash)))}\n"
+        f"• 💳 Karta: {_safe(format_price(int(card)))}\n"
+        f"<b>📉 Umumiy chiqim:</b> {_safe(format_price(int(expense_total)))}\n"
+        f"<b>💰 Sof foyda:</b> {_safe(format_price(int(net_profit)))}\n"
+        f"<b>🧼 Yuvilgan mashinalar:</b> {len(orders)} ta\n"
+        f"<b>🚫 Bekor qilingan buyurtmalar:</b> {len(cancellations)} ta"
     )
     if worker is not None:
         worker_share = revenue * Decimal(worker.share_percent) / Decimal("100")
         header += (
-            f"\n<b>{_safe(worker.name)} ulushi "
+            f"\n<b>👷 {_safe(worker.name)} ulushi "
             f"({worker.share_percent:g}%):</b> "
             f"{_safe(format_price(int(worker_share)))}"
         )
     if worker_id is not None:
-        header += "\n<i>Chiqimlar davr bo'yicha umumiy ko'rsatildi.</i>"
+        header += "\n<i>📉 Chiqimlar davr bo'yicha umumiy ko'rsatildi.</i>"
 
     detail_lines: list[str] = []
     if expenses:
-        detail_lines.append("\n<b>Chiqimlar:</b>")
+        detail_lines.append("\n<b>📉 Chiqimlar:</b>")
         detail_lines.extend(
             f"• {_safe(expense.description)} — "
             f"{_safe(format_price(int(expense.amount)))}"
             for expense in expenses
         )
     if cancellations:
-        detail_lines.append("\n<b>Bekor qilish sabablari:</b>")
+        detail_lines.append("\n<b>🚫 Bekor qilish sabablari:</b>")
         for cancellation, order in cancellations:
             reason = _safe(cancellation.reason)
             if len(reason) > 1000:
@@ -147,7 +147,7 @@ async def build_financial_report(
     for line in detail_lines:
         if len(current) + len(line) + 1 > 3800:
             chunks.append(current)
-            current = "<b>Hisobot davomi</b>\n" + line
+            current = "<b>📊 Hisobot davomi</b>\n" + line
         else:
             current += "\n" + line
     chunks.append(current)

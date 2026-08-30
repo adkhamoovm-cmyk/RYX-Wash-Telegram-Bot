@@ -159,24 +159,24 @@ def _register_user_routes(
             worked_today = _duration_text(work_start, work_end)
 
         lines = [
-            "<b>Mening kabinetim</b>",
+            "<b>👤 Mening kabinetim</b>",
             "",
-            f"<b>Ism:</b> {_safe(worker.name)}",
-            f"<b>Telefon:</b> {_safe(worker.phone)}",
-            f"<b>Foiz ulushi:</b> {_safe(worker.share_percent)}%",
-            f"<b>Davr:</b> {_safe(period_labels[period_code])}",
-            f"<b>Yuvilgan mashinalar:</b> {washed_count or 0} ta",
-            f"<b>Ishlab topgan summa:</b> "
+            f"<b>👤 Ism:</b> {_safe(worker.name)}",
+            f"<b>📞 Telefon:</b> {_safe(worker.phone)}",
+            f"<b>📈 Foiz ulushi:</b> {_safe(worker.share_percent)}%",
+            f"<b>🗓️ Davr:</b> {_safe(period_labels[period_code])}",
+            f"<b>🧼 Yuvilgan mashinalar:</b> {washed_count or 0} ta",
+            f"<b>💰 Ishlab topgan summa:</b> "
             f"{_safe(format_price(int(earnings)))}",
             "",
-            f"<b>Joriy smena:</b> "
+            f"<b>🕒 Joriy smena:</b> "
             f"{'ishda' if is_at_work else 'ishda emas'}",
-            f"<b>Bugungi ish vaqti:</b> {_safe(worked_today)}",
+            f"<b>⏱️ Bugungi ish vaqti:</b> {_safe(worked_today)}",
             "",
-            "<b>Oxirgi 10 ta buyurtma:</b>",
+            "<b>📋 Oxirgi 10 ta buyurtma:</b>",
         ]
         if not recent_orders:
-            lines.append("Buyurtmalar hali yo'q.")
+            lines.append("📭 Buyurtmalar hali yo'q.")
         else:
             for order in recent_orders:
                 order_date = (order.completed_at or order.created_at).astimezone(
@@ -190,13 +190,13 @@ def _register_user_routes(
                 )
         return "\n".join(lines)
 
-    @router.message(F.text == "Mening kabinetim")
+    @router.message(F.text.in_({"👤 Mening kabinetim", "Mening kabinetim"}))
     async def show_worker_cabinet(message: Message) -> None:
         if not message.from_user:
             return
         text = await render_worker_cabinet(message.from_user.id)
         if text is None:
-            await message.answer("Siz ishchi sifatida ro'yxatdan o'tmagansiz.")
+            await message.answer("❌ Siz ishchi sifatida ro'yxatdan o'tmagansiz.")
             return
         await message.answer(text, reply_markup=worker_cabinet_period_keyboard())
 
@@ -207,7 +207,7 @@ def _register_user_routes(
             return
         text = await render_worker_cabinet(callback.from_user.id, period_code)
         if text is None:
-            await callback.answer("Ishchi kabineti topilmadi.", show_alert=True)
+            await callback.answer("❌ Ishchi kabineti topilmadi.", show_alert=True)
             return
         await callback.message.edit_text(
             text,
@@ -225,10 +225,10 @@ def _register_user_routes(
 
     def worker_offer_text(order: Order) -> str:
         return (
-            f"<b>Yangi buyurtma #{order.id}</b>\n\n"
-            f"<b>Mashina:</b> {_safe(order.car_model)}\n"
-            f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n\n"
-            "Buyurtmani qabul qilasizmi?"
+            f"<b>🆕 Yangi buyurtma #{order.id}</b>\n\n"
+            f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
+            f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n\n"
+            "📥 Buyurtmani qabul qilasizmi?"
         )
 
     async def activate_queued_order(
@@ -291,15 +291,15 @@ def _register_user_routes(
                     sibling_count += 1
             customer = await session.get(User, order.customer_id)
             text = (
-                f"<b>Navbatdagi buyurtma #{order.id}</b>\n\n"
-                f"<b>Mijoz:</b> {_safe(customer.name if customer else '—')}\n"
-                f"<b>Mashina:</b> {_safe(order.car_model)}\n"
-                f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
-                f"<b>Rang:</b> {_safe(order.car_color or '—')}\n"
-                f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
-                f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-                f"<b>Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
-                f"<b>Izoh:</b> {_safe(order.comment or '—')}\n\n"
+            f"<b>📋 Navbatdagi buyurtma #{order.id}</b>\n\n"
+            f"<b>👤 Mijoz:</b> {_safe(customer.name if customer else '—')}\n"
+            f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
+            f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
+            f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
+            f"<b>💳 To'lov:</b> {_safe(order.payment_method)}\n"
+            f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+            f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
+            f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}\n\n"
                 "Buyurtmani qabul qilasizmi?"
             )
             latitude = float(order.latitude) if order.latitude is not None else None
@@ -375,7 +375,7 @@ def _register_user_routes(
 
         await bot.send_message(
             settings.director_id,
-            f"{_safe(worker_name)} endi bo'sh, navbatdagi buyurtmani "
+            f"👷 {_safe(worker_name)} endi bo'sh, navbatdagi buyurtmani "
             f"({_safe(customer_name)}, {_safe(car_model)}) beramizmi?",
             reply_markup=queue_offer_decision_keyboard(order_id, worker_id),
         )
@@ -387,7 +387,7 @@ def _register_user_routes(
         _, group_id, _lead_id = callback.data.split(":")
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
-                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             orders = list(
                 (
@@ -405,7 +405,7 @@ def _register_user_routes(
                 for order in orders
             ):
                 await callback.answer(
-                    "Guruh buyurtmasining holati o'zgargan.", show_alert=True
+                    "⚠️ Guruh buyurtmasining holati o'zgargan.", show_alert=True
                 )
                 return
             workers = list(
@@ -424,15 +424,15 @@ def _register_user_routes(
                     order.status = "navbatda"
                 await session.commit()
                 await callback.message.edit_reply_markup(reply_markup=None)
-                await callback.answer("Guruh navbatga qo'yildi.")
+                await callback.answer("✅ Guruh navbatga qo'yildi.")
                 await callback.message.answer(
-                    "Hozir smenadagi ishchi yo'q. Guruh global navbatga qo'yildi."
+                    "⚠️ Hozir smenadagi ishchi yo'q. Guruh global navbatga qo'yildi."
                 )
                 return
             await session.commit()
         await callback.answer()
         await callback.message.answer(
-            "Guruhdagi barcha mashinalar uchun bitta ishchini tanlang:",
+            "👷 Guruhdagi barcha mashinalar uchun bitta ishchini tanlang:",
             reply_markup=group_workers_keyboard(int(_lead_id), workers),
         )
 
@@ -442,7 +442,7 @@ def _register_user_routes(
         lead_order_id, worker_id = int(lead_order_id_raw), int(worker_id_raw)
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
-                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             lead_order_snapshot = await session.get(Order, lead_order_id)
             group_id = (
@@ -478,7 +478,7 @@ def _register_user_routes(
                 )
             ):
                 await callback.answer(
-                    "Ishchi yoki guruh holati o'zgargan.", show_alert=True
+                    "⚠️ Ishchi yoki guruh holati o'zgargan.", show_alert=True
                 )
                 return
             for order in orders:
@@ -502,12 +502,12 @@ def _register_user_routes(
         else:
             await callback.bot.send_message(
                 worker_id,
-                f"Sizda navbatda yana {len(orders)} ta buyurtma bor.",
+                f"📋 Sizda navbatda yana {len(orders)} ta buyurtma bor.",
             )
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer()
         await callback.message.answer(
-            f"Guruhdagi {len(orders)} ta mashina {worker_name} ga biriktirildi."
+            f"✅ Guruhdagi {len(orders)} ta mashina {worker_name} ga biriktirildi."
         )
 
     @router.callback_query(F.data.startswith("group_split:"))
@@ -542,20 +542,20 @@ def _register_user_routes(
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer()
         await callback.message.answer(
-            "Har bir mashina uchun ishchini alohida tanlang:"
+            "👷 Har bir mashina uchun ishchini alohida tanlang:"
         )
         for order in orders:
             await callback.bot.send_message(
                 settings.director_id,
-                f"<b>Buyurtma #{order.id}</b>\n"
-                f"<b>Mashina:</b> {_safe(order.car_model)}\n"
-                f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
-                f"<b>Rang:</b> {_safe(order.car_color or '—')}\n"
-                f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}",
+            f"<b>📋 Buyurtma #{order.id}</b>\n"
+            f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
+            f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
+            f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
+            f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}",
                 reply_markup=new_order_assignment_keyboard(order.id),
             )
 
-    @router.message(F.text == "Ishchi qo'shish")
+    @router.message(F.text.in_({"➕👷 Ishchi qo'shish", "Ishchi qo'shish"}))
     async def start_worker_registration(
         message: Message, state: FSMContext
     ) -> None:
@@ -563,12 +563,12 @@ def _register_user_routes(
             return
         async with sessions() as session:
             if not await is_director(session, message.from_user.id):
-                await message.answer("Bu amal faqat direktor uchun.")
+                await message.answer("❌ Bu amal faqat direktor uchun.")
                 return
         await state.clear()
         await state.set_state(WorkerRegistrationStates.waiting_user_id)
         await message.answer(
-            "Ishchining Telegram ID raqamini yuboring:",
+            "🪪 Ishchining Telegram ID raqamini yuboring:",
             reply_markup=ReplyKeyboardRemove(),
         )
 
@@ -577,34 +577,34 @@ def _register_user_routes(
         try:
             worker_id = int(message.text.strip())
         except ValueError:
-            await message.answer("Telegram ID faqat raqam bo'lishi kerak.")
+            await message.answer("❌ Telegram ID faqat raqam bo'lishi kerak.")
             return
         if worker_id <= 0 or worker_id == settings.director_id:
-            await message.answer("Iltimos, to'g'ri ishchi Telegram ID'sini yuboring.")
+            await message.answer("❌ Iltimos, to'g'ri ishchi Telegram ID'sini yuboring.")
             return
         await state.update_data(worker_id=worker_id)
         await state.set_state(WorkerRegistrationStates.waiting_name)
-        await message.answer("Ishchining ism-familyasini yuboring:")
+        await message.answer("👤 Ishchining ism-familyasini yuboring:")
 
     @router.message(WorkerRegistrationStates.waiting_name, F.text)
     async def receive_worker_name(message: Message, state: FSMContext) -> None:
         name = message.text.strip()
         if len(name) < 2 or len(name) > 150:
-            await message.answer("Ism-familya 2–150 belgi bo'lishi kerak.")
+            await message.answer("❌ Ism-familya 2–150 belgi bo'lishi kerak.")
             return
         await state.update_data(name=name)
         await state.set_state(WorkerRegistrationStates.waiting_phone)
-        await message.answer("Ishchining telefon raqamini yuboring:")
+        await message.answer("📞 Ishchining telefon raqamini yuboring:")
 
     @router.message(WorkerRegistrationStates.waiting_phone, F.text)
     async def receive_worker_phone(message: Message, state: FSMContext) -> None:
         phone = message.text.strip()
         if len(phone) < 5 or len(phone) > 40:
-            await message.answer("Telefon raqamini to'g'ri kiriting:")
+            await message.answer("❌ Telefon raqamini to'g'ri kiriting:")
             return
         await state.update_data(phone=phone)
         await state.set_state(WorkerRegistrationStates.waiting_percent)
-        await message.answer("Ishchining foiz ulushini kiriting (masalan: 30%):")
+        await message.answer("📈 Ishchining foiz ulushini kiriting (masalan: 30%):")
 
     @router.message(WorkerRegistrationStates.waiting_percent, F.text)
     async def receive_worker_percent(message: Message, state: FSMContext) -> None:
@@ -612,17 +612,17 @@ def _register_user_routes(
         try:
             percent = Decimal(raw_percent)
         except InvalidOperation:
-            await message.answer("Foizni raqam ko'rinishida kiriting, masalan 30%.")
+            await message.answer("❌ Foizni raqam ko'rinishida kiriting, masalan 30%.")
             return
         if percent <= 0 or percent > 100:
-            await message.answer("Foiz 0 dan katta va 100 dan kichik yoki teng bo'lsin.")
+            await message.answer("❌ Foiz 0 dan katta va 100 dan kichik yoki teng bo'lsin.")
             return
 
         data = await state.get_data()
         async with sessions() as session:
             director = await find_user(session, message.from_user.id)
             if not director or director.rol != "direktor":
-                await message.answer("Bu amal faqat direktor uchun.")
+                await message.answer("❌ Bu amal faqat direktor uchun.")
                 return
             user = await find_user(session, data["worker_id"])
             if user is None:
@@ -657,22 +657,22 @@ def _register_user_routes(
 
         await state.clear()
         await message.answer(
-            f"{_safe(data['name'])} ishchi sifatida qo'shildi. "
+            f"✅ {_safe(data['name'])} ishchi sifatida qo'shildi. "
             "Boshlang'ich holati: smenada emas.",
             reply_markup=director_menu_keyboard(),
         )
 
-    @router.message(F.text == "Ishga keldim")
+    @router.message(F.text.in_({"🟢 Ishga keldim", "Ishga keldim"}))
     async def start_shift(message: Message) -> None:
         if not message.from_user:
             return
         async with sessions() as session:
             worker = await get_worker(session, message.from_user.id)
             if worker is None:
-                await message.answer("Siz ishchi sifatida ro'yxatdan o'tmagansiz.")
+                await message.answer("❌ Siz ishchi sifatida ro'yxatdan o'tmagansiz.")
                 return
             if worker.status == "band":
-                await message.answer("Siz hozir buyurtma bilan bandsiz.")
+                await message.answer("⚠️ Siz hozir buyurtma bilan bandsiz.")
                 return
             worker.status = "bo'sh"
             worker.shift_started_at = now_tashkent()
@@ -682,29 +682,29 @@ def _register_user_routes(
                 user.rol = "ishchi"
             await session.commit()
         await message.answer(
-            "Smena boshlandi. Siz hozir bo'shsiz.",
+            "✅ Smena boshlandi. Siz hozir bo'shsiz.",
             reply_markup=worker_menu_keyboard(),
         )
 
-    @router.message(F.text == "Ishdan ketdim")
+    @router.message(F.text.in_({"🔴 Ishdan ketdim", "Ishdan ketdim"}))
     async def end_shift(message: Message) -> None:
         if not message.from_user:
             return
         async with sessions() as session:
             worker = await get_worker(session, message.from_user.id)
             if worker is None:
-                await message.answer("Siz ishchi sifatida ro'yxatdan o'tmagansiz.")
+                await message.answer("❌ Siz ishchi sifatida ro'yxatdan o'tmagansiz.")
                 return
             if worker.status == "band":
                 await message.answer(
-                    "Buyurtma yakunlanmaguncha smenani tugatib bo'lmaydi."
+                    "⚠️ Buyurtma yakunlanmaguncha smenani tugatib bo'lmaydi."
                 )
                 return
             worker.status = "smenada_emas"
             worker.shift_ended_at = now_tashkent()
             await session.commit()
         await message.answer(
-            "Smena tugadi.",
+            "✅ Smena tugadi.",
             reply_markup=worker_menu_keyboard(),
         )
 
@@ -717,7 +717,7 @@ def _register_user_routes(
         order_id = int(callback.data.split(":", 1)[1])
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
-                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             order = await session.get(Order, order_id, with_for_update=True)
             if (
@@ -726,7 +726,7 @@ def _register_user_routes(
                 or order.worker_id is not None
             ):
                 await callback.answer(
-                    "Buyurtma hozir ishchiga yuborish uchun tayyor emas.",
+                    "⚠️ Buyurtma hozir ishchiga yuborish uchun tayyor emas.",
                     show_alert=True,
                 )
                 return
@@ -742,14 +742,14 @@ def _register_user_routes(
         if not workers:
             await callback.answer()
             await callback.message.answer(
-                "Hozir barcha ishchilar band yoki smenada emas. "
+                "⚠️ Hozir barcha ishchilar band yoki smenada emas. "
                 "Buyurtma bilan nima qilamiz?",
                 reply_markup=no_available_workers_keyboard(order_id),
             )
             return
         await callback.answer()
         await callback.message.answer(
-            f"Buyurtma #{order_id} uchun bo'sh ishchini tanlang:",
+            f"👷 Buyurtma #{order_id} uchun bo'sh ishchini tanlang:",
             reply_markup=available_workers_keyboard(order_id, workers),
         )
 
@@ -758,7 +758,7 @@ def _register_user_routes(
         order_id = int(callback.data.split(":", 1)[1])
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
-                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             order = await session.get(Order, order_id, with_for_update=True)
             if (
@@ -767,7 +767,7 @@ def _register_user_routes(
                 or order.worker_id is not None
             ):
                 await callback.answer(
-                    "Bu buyurtmani navbatga qo'yib bo'lmaydi.", show_alert=True
+                    "⚠️ Bu buyurtmani navbatga qo'yib bo'lmaydi.", show_alert=True
                 )
                 return
             order.status = "navbatda"
@@ -776,8 +776,8 @@ def _register_user_routes(
             order.queue_prompted_at = None
             await session.commit()
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.answer("Buyurtma navbatga qo'yildi.")
-        await callback.message.answer(f"Buyurtma #{order_id} navbatga qo'yildi.")
+        await callback.answer("✅ Buyurtma navbatga qo'yildi.")
+        await callback.message.answer(f"✅ Buyurtma #{order_id} navbatga qo'yildi.")
 
     @router.callback_query(F.data.startswith("busy_workers:"))
     async def show_busy_workers(callback: CallbackQuery) -> None:
@@ -809,7 +809,7 @@ def _register_user_routes(
                 ).all()
             )
         if not workers:
-            await callback.answer("Band ishchilar topilmadi.", show_alert=True)
+            await callback.answer("📭 Band ishchilar topilmadi.", show_alert=True)
             return
         await callback.answer()
         await callback.message.answer(
@@ -901,10 +901,10 @@ def _register_user_routes(
                 order.queue_prompted_at = None
                 await session.commit()
                 await callback.message.edit_reply_markup(reply_markup=None)
-                await callback.answer("Buyurtma navbatda qoldi.")
+                await callback.answer("📋 Buyurtma navbatda qoldi.")
                 return
             if decision != "yes":
-                await callback.answer("Noto'g'ri tanlov.", show_alert=True)
+                await callback.answer("❌ Noto'g'ri tanlov.", show_alert=True)
                 return
             if worker.status != "bo'sh":
                 order.queue_offer_worker_id = None
@@ -922,7 +922,7 @@ def _register_user_routes(
             )
             return
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.answer("Navbatdagi buyurtma ishchiga yuborildi.")
+        await callback.answer("✅ Navbatdagi buyurtma ishchiga yuborildi.")
 
     @router.callback_query(F.data.startswith("assign_worker:"))
     async def assign_order(
@@ -934,7 +934,7 @@ def _register_user_routes(
         order_id, worker_id = int(order_id_raw), int(worker_id_raw)
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
-                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             # End the authorization read transaction before the compare-and-set
             # below. This also lets the SQLite regression test use independent
@@ -994,7 +994,7 @@ def _register_user_routes(
                         show_alert=True,
                     )
                     return
-                await callback.answer("Bu ishchi endi bo'sh emas.", show_alert=True)
+                await callback.answer("⚠️ Bu ishchi endi bo'sh emas.", show_alert=True)
                 return
             order = await session.get(Order, order_id)
             worker = await session.get(Worker, worker_id)
@@ -1036,7 +1036,7 @@ def _register_user_routes(
                 session, order_id, callback.from_user.id
             )
             if not order or not worker:
-                await callback.answer("Bu buyurtma sizga biriktirilmagan.", show_alert=True)
+                await callback.answer("❌ Bu buyurtma sizga biriktirilmagan.", show_alert=True)
                 return
             if order.status != "ishchiga_yuborildi":
                 await callback.answer(
@@ -1052,14 +1052,14 @@ def _register_user_routes(
             customer_phone = customer.phone if customer else "—"
 
             full_text = (
-                f"<b>Buyurtma #{order.id} qabul qilindi</b>\n\n"
-                f"<b>Mijoz:</b> {_safe(customer_name)}\n"
-                f"<b>Mashina:</b> {_safe(order.car_model)}\n"
-                f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
-                f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
-                f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-                f"<b>Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
-                f"<b>Izoh:</b> {_safe(order.comment or '—')}"
+            f"<b>✅ Buyurtma #{order.id} qabul qilindi</b>\n\n"
+            f"<b>👤 Mijoz:</b> {_safe(customer_name)}\n"
+            f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
+            f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
+            f"<b>💳 To'lov:</b> {_safe(order.payment_method)}\n"
+            f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+            f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
+            f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
             )
             latitude = float(order.latitude) if order.latitude is not None else None
             longitude = float(order.longitude) if order.longitude is not None else None
@@ -1076,7 +1076,7 @@ def _register_user_routes(
         await callback.message.edit_text(full_text)
         await callback.message.answer(
             (
-                "Lokatsiya:"
+                "📍 Lokatsiya:"
                 if latitude is not None and longitude is not None
                 else f"Manzil: {_safe(address or '—')}"
             ),
@@ -1092,7 +1092,7 @@ def _register_user_routes(
             await callback.bot.send_photo(
                 callback.from_user.id,
                 car_photo_id,
-                caption=f"Buyurtma #{order_id} boshlang'ich mashina rasmi",
+                 caption=f"📷 Buyurtma #{order_id} boshlang'ich mashina rasmi",
             )
         await callback.bot.send_message(
             settings.director_id,
@@ -1110,7 +1110,7 @@ def _register_user_routes(
                 session, order_id, callback.from_user.id
             )
             if not order or not worker:
-                await callback.answer("Bu buyurtma sizga biriktirilmagan.", show_alert=True)
+                await callback.answer("❌ Bu buyurtma sizga biriktirilmagan.", show_alert=True)
                 return
             if order.status != "ishchiga_yuborildi":
                 await callback.answer(
@@ -1151,9 +1151,9 @@ def _register_user_routes(
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.bot.send_message(
             settings.director_id,
-            f"{_safe(worker_name)} rad etdi (buyurtma #{order_id}).",
+            f"❌ {_safe(worker_name)} rad etdi (buyurtma #{order_id}).",
         )
-        await callback.answer("Buyurtma rad etildi.")
+        await callback.answer("❌ Buyurtma rad etildi.")
         await offer_next_queued_order(callback.from_user.id, callback.bot)
 
     async def can_cancel(
@@ -1174,7 +1174,7 @@ def _register_user_routes(
         async with sessions() as session:
             order = await session.get(Order, order_id)
             if not order:
-                await callback.answer("Buyurtma topilmadi.", show_alert=True)
+                await callback.answer("❌ Buyurtma topilmadi.", show_alert=True)
                 return
             if order.status in {"yakunlandi", "bekor_qilindi"}:
                 await callback.answer(
@@ -1233,12 +1233,12 @@ def _register_user_routes(
         remove_offer_timeout(scheduler, order_id)
         await bot.send_message(
             settings.director_id,
-            f"Buyurtma #{order_id} bekor qilindi. Sabab: {_safe(reason)}",
+            f"🚫 Buyurtma #{order_id} bekor qilindi. Sabab: {_safe(reason)}",
         )
         if worker_id and worker_id != actor_id:
             await bot.send_message(
                 worker_id,
-                f"Buyurtma #{order_id} bekor qilindi. Sabab: {_safe(reason)}",
+                f"🚫 Buyurtma #{order_id} bekor qilindi. Sabab: {_safe(reason)}",
             )
         if worker_id and not was_waiting_in_queue:
             await offer_next_queued_order(worker_id, bot)
@@ -1255,14 +1255,14 @@ def _register_user_routes(
         order_id = int(order_id_raw)
         data = await state.get_data()
         if data.get("cancel_order_id") != order_id:
-            await callback.answer("Bekor qilish ma'lumoti eskirgan.", show_alert=True)
+            await callback.answer("⚠️ Bekor qilish ma'lumoti eskirgan.", show_alert=True)
             return
         if reason_code == "other":
             await state.set_state(CancellationStates.waiting_custom_reason)
             await callback.answer()
             await callback.message.edit_reply_markup(reply_markup=None)
             await callback.message.answer(
-                "Bekor qilish sababini matn ko'rinishida yozing:"
+                "📝 Bekor qilish sababini matn ko'rinishida yozing:"
             )
             return
         reasons = {
@@ -1272,7 +1272,7 @@ def _register_user_routes(
         }
         reason = reasons.get(reason_code)
         if not reason:
-            await callback.answer("Noto'g'ri sabab.", show_alert=True)
+            await callback.answer("❌ Noto'g'ri sabab.", show_alert=True)
             return
         completed = await finalize_cancellation(
             callback.from_user.id, order_id, reason, callback.bot
@@ -1280,7 +1280,7 @@ def _register_user_routes(
         await state.clear()
         await callback.message.edit_reply_markup(reply_markup=None)
         if completed:
-            await callback.answer("Buyurtma bekor qilindi.")
+            await callback.answer("✅ Buyurtma bekor qilindi.")
         else:
             await callback.answer(
                 "Buyurtmani bekor qilib bo'lmadi.", show_alert=True
@@ -1292,29 +1292,29 @@ def _register_user_routes(
     ) -> None:
         reason = message.text.strip()
         if not reason:
-            await message.answer("Sabab majburiy. Iltimos, sababni yozing:")
+            await message.answer("⚠️ Sabab majburiy. Iltimos, sababni yozing:")
             return
         if len(reason) > 2000:
-            await message.answer("Sabab 2000 belgidan oshmasin.")
+            await message.answer("❌ Sabab 2000 belgidan oshmasin.")
             return
         data = await state.get_data()
         order_id = data.get("cancel_order_id")
         if not isinstance(order_id, int):
             await state.clear()
-            await message.answer("Bekor qilish ma'lumoti topilmadi.")
+            await message.answer("❌ Bekor qilish ma'lumoti topilmadi.")
             return
         completed = await finalize_cancellation(
             message.from_user.id, order_id, reason, message.bot
         )
         await state.clear()
         if completed:
-            await message.answer(f"Buyurtma #{order_id} bekor qilindi.")
+            await message.answer(f"✅ Buyurtma #{order_id} bekor qilindi.")
         else:
-            await message.answer("Buyurtmani bekor qilib bo'lmadi.")
+            await message.answer("❌ Buyurtmani bekor qilib bo'lmadi.")
 
     @router.message(CancellationStates.waiting_custom_reason)
     async def require_custom_cancellation_reason(message: Message) -> None:
-        await message.answer("Sabab majburiy. Uni matn ko'rinishida yozing:")
+        await message.answer("⚠️ Sabab majburiy. Uni matn ko'rinishida yozing:")
 
     @router.callback_query(F.data.startswith("worker_status:"))
     async def update_worker_status(callback: CallbackQuery, state: FSMContext) -> None:
@@ -1327,7 +1327,7 @@ def _register_user_routes(
                 session, order_id, callback.from_user.id
             )
             if not order or not worker:
-                await callback.answer("Bu buyurtma sizga biriktirilmagan.", show_alert=True)
+                await callback.answer("❌ Bu buyurtma sizga biriktirilmagan.", show_alert=True)
                 return
             timestamp = now_tashkent()
             stage_data = {
@@ -1363,12 +1363,12 @@ def _register_user_routes(
                     await state.update_data(order_id=order_id)
                     await callback.message.edit_reply_markup(reply_markup=None)
                     await callback.message.answer(
-                        "Ish tugadi. Birinchi rasmni yuboring (Oldin):",
+                        "✅ Ish tugadi. Birinchi rasmni yuboring (Oldin):",
                         reply_markup=ReplyKeyboardRemove(),
                     )
                     await callback.answer()
                     return
-                await callback.answer("Noto'g'ri status.", show_alert=True)
+                await callback.answer("❌ Noto'g'ri status.", show_alert=True)
                 return
 
             expected_status, new_status, notice, next_stage = stage_data[stage]
@@ -1408,21 +1408,21 @@ def _register_user_routes(
     async def receive_before_photo(message: Message, state: FSMContext) -> None:
         await state.update_data(before_photo_id=message.photo[-1].file_id)
         await state.set_state(WorkerCompletionStates.waiting_after_photo)
-        await message.answer("Endi ikkinchi rasmni yuboring (Keyin):")
+        await message.answer("📷 Endi ikkinchi rasmni yuboring (Keyin):")
 
     @router.message(WorkerCompletionStates.waiting_after_photo, F.photo)
     async def receive_after_photo(message: Message, state: FSMContext) -> None:
         await state.update_data(after_photo_id=message.photo[-1].file_id)
         await state.set_state(WorkerCompletionStates.waiting_comment)
-        await message.answer("Ish bo'yicha qisqa izoh yuboring:")
+        await message.answer("📝 Ish bo'yicha qisqa izoh yuboring:")
 
     @router.message(WorkerCompletionStates.waiting_before_photo)
     async def require_before_photo(message: Message) -> None:
-        await message.answer("Iltimos, avval «Oldin» rasmini yuboring.")
+        await message.answer("⚠️ Iltimos, avval «Oldin» rasmini yuboring.")
 
     @router.message(WorkerCompletionStates.waiting_after_photo)
     async def require_after_photo(message: Message) -> None:
-        await message.answer("Iltimos, «Keyin» rasmini yuboring.")
+        await message.answer("⚠️ Iltimos, «Keyin» rasmini yuboring.")
 
     @router.message(WorkerCompletionStates.waiting_comment, F.text)
     async def complete_order(message: Message, state: FSMContext) -> None:
@@ -1431,7 +1431,7 @@ def _register_user_routes(
         data = await state.get_data()
         comment = message.text.strip()
         if not comment or len(comment) > 2000:
-            await message.answer("Qisqa izoh 1–2000 belgi bo'lishi kerak.")
+            await message.answer("❌ Qisqa izoh 1–2000 belgi bo'lishi kerak.")
             return
         async with sessions() as session:
             order = await session.get(Order, data["order_id"])
@@ -1443,7 +1443,7 @@ def _register_user_routes(
                 or order.status != "yakunlanmoqda"
             ):
                 await state.clear()
-                await message.answer("Buyurtma topilmadi yoki sizga tegishli emas.")
+                await message.answer("❌ Buyurtma topilmadi yoki sizga tegishli emas.")
                 return
             customer = await session.get(User, order.customer_id)
             completed_at = now_tashkent()
@@ -1455,41 +1455,41 @@ def _register_user_routes(
             worker.status = "bo'sh"
             duration = _duration_text(order.washing_started_at, completed_at)
             report = (
-                f"<b>Yakuniy hisobot | Buyurtma #{order.id}</b>\n\n"
-                f"<b>Ishchi:</b> {_safe(worker.name)}\n"
-                f"<b>Mijoz:</b> {_safe(customer.name if customer else '—')} "
+                 f"<b>📊 Yakuniy hisobot | Buyurtma #{order.id}</b>\n\n"
+                 f"<b>👷 Ishchi:</b> {_safe(worker.name)}\n"
+                 f"<b>👤 Mijoz:</b> {_safe(customer.name if customer else '—')} "
                 f"({_safe(customer.phone if customer else '—')})\n"
-                f"<b>Mashina:</b> {_safe(order.car_model)}\n"
-                f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
-                f"<b>Rang:</b> {_safe(order.car_color or '—')}\n"
-                f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-                f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
-                f"<b>Ish davomiyligi:</b> {_safe(duration)}\n"
-                f"<b>Izoh:</b> {_safe(comment)}"
+                 f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
+                 f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
+                 f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
+                 f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                 f"<b>💳 To'lov:</b> {_safe(order.payment_method)}\n"
+                 f"<b>⏱️ Ish davomiyligi:</b> {_safe(duration)}\n"
+                 f"<b>📝 Izoh:</b> {_safe(comment)}"
             )
             await session.commit()
             before_photo_id = order.before_photo_id
             after_photo_id = order.after_photo_id
             customer_id = order.customer_id
         await message.answer(
-            f"Buyurtma #{data['order_id']} yakunlandi.",
+            f"✅ Buyurtma #{data['order_id']} yakunlandi.",
             reply_markup=worker_menu_keyboard(),
         )
         await message.bot.send_message(settings.director_id, report)
         await message.bot.send_photo(
             settings.director_id,
             before_photo_id,
-            caption="Oldin",
+            caption="📷 Oldin",
         )
         await message.bot.send_photo(
             settings.director_id,
             after_photo_id,
-            caption="Keyin",
+            caption="📷 Keyin",
         )
         await notify_customer(
             message.bot,
             customer_id,
-            "Buyurtmangiz yakunlandi. "
+             "✅ Buyurtmangiz yakunlandi. "
             "RYX Wash xizmatidan foydalanganingiz uchun rahmat!",
         )
         await offer_next_queued_order(message.from_user.id, message.bot)
@@ -1502,7 +1502,7 @@ def _register_user_routes(
 
     @router.message(WorkerCompletionStates.waiting_comment)
     async def require_completion_comment(message: Message) -> None:
-        await message.answer("Iltimos, ish bo'yicha qisqa izohni matn shaklida yuboring.")
+        await message.answer("📝 Iltimos, ish bo'yicha qisqa izohni matn shaklida yuboring.")
 
 
 def register_worker_routes(
