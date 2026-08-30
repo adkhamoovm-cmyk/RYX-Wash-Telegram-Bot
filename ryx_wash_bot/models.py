@@ -102,6 +102,9 @@ class Worker(Base):
     status: Mapped[str] = mapped_column(
         "holat", String(20), nullable=False, default="smenada_emas"
     )
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true", index=True
+    )
     shift_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -164,6 +167,9 @@ class Order(Base):
     )
     arrived_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    arrival_eta_minutes: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
     )
     washing_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

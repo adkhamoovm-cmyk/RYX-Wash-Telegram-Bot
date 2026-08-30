@@ -36,6 +36,7 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS route_started_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS arrival_eta_minutes INTEGER,
                     ADD COLUMN IF NOT EXISTS washing_started_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS before_photo_id VARCHAR(255),
@@ -49,6 +50,14 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS order_group_id VARCHAR(36),
                     ADD COLUMN IF NOT EXISTS group_mode VARCHAR(20),
                     ADD COLUMN IF NOT EXISTS wash_duration_minutes INTEGER NOT NULL DEFAULT 60
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE workers
+                    ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE
                 """
             )
         )

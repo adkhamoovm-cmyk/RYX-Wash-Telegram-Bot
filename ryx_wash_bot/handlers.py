@@ -100,6 +100,7 @@ MAIN_MENU_TEXTS = frozenset(
         "Buyurtmalar tarixi",
         "➕👷 Ishchi qo'shish",
         "Ishchi qo'shish",
+        "👷 Ishchilarni boshqarish",
         "📝 Qo'lda buyurtma qo'shish",
         "Qo'lda buyurtma qo'shish",
         "🏷️ Narxlarni boshqarish",
@@ -258,6 +259,12 @@ def _new_router(
 
             worker = await session.get(Worker, telegram_id)
             if worker is not None:
+                if not worker.active:
+                    await state.clear()
+                    await message.answer(
+                        "⚠️ Sizning ishchi profilingiz hozir faol emas."
+                    )
+                    return
                 user = await find_user(session, telegram_id)
                 if user is None:
                     user = User(
@@ -441,10 +448,18 @@ def _new_router(
                         order.status,
                         f"❔ {_safe(order.status)}",
                     )
+                    eta_line = (
+                        f"  ⏱ Taxminiy yetib kelish: "
+                        f"{order.arrival_eta_minutes} daqiqa\n"
+                        if order.arrival_eta_minutes is not None
+                        and order.status == "yo'lda"
+                        else ""
+                    )
                     parts.append(
                         f"• 🚗 {_safe(order.car_model)} | "
                         f"{_safe(order.plate_number or 'Hali kiritilmagan')}\n"
                         f"  {status}\n"
+                        f"{eta_line}"
                         f"  💰 {_safe(format_price(int(order.car_price)))}"
                     )
         history_text = "\n".join(parts)

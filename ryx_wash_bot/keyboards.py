@@ -22,6 +22,7 @@ def customer_menu_keyboard() -> ReplyKeyboardMarkup:
 def director_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.add(KeyboardButton(text="➕👷 Ishchi qo'shish"))
+    builder.add(KeyboardButton(text="👷 Ishchilarni boshqarish"))
     builder.add(KeyboardButton(text="📝 Qo'lda buyurtma qo'shish"))
     builder.add(KeyboardButton(text="🏷️ Narxlarni boshqarish"))
     builder.add(KeyboardButton(text="📉 Xarajat qo'shish"))
@@ -163,6 +164,33 @@ def worker_cabinet_period_keyboard():
     builder.button(text="📅 Shu hafta", callback_data="cabinet_period:week")
     builder.button(text="📅 Shu oy", callback_data="cabinet_period:month")
     builder.adjust(3)
+    return builder.as_markup()
+
+
+def worker_management_keyboard(workers: list):
+    builder = InlineKeyboardBuilder()
+    for worker in workers:
+        action = "deactivate" if worker.active else "activate"
+        state = "faol" if worker.active else "faol emas"
+        builder.button(
+            text=f"{'🟢' if worker.active else '⚪'} {worker.name} ({state})"[:60],
+            callback_data=f"worker_manage:{action}:{worker.user_id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def worker_deactivate_confirm_keyboard(worker_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Ha, faolsizlantirish",
+        callback_data=f"worker_deactivate_confirm:{worker_id}",
+    )
+    builder.button(
+        text="↩️ Bekor qilish",
+        callback_data="worker_manage_cancel",
+    )
+    builder.adjust(1)
     return builder.as_markup()
 
 

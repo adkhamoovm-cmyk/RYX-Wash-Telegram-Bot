@@ -59,6 +59,7 @@ class ManualOrderStates(StatesGroup):
 class WorkerOrderStates(StatesGroup):
     waiting_plate = State()
     waiting_payment = State()
+    waiting_arrival_eta = State()
 
 
 class DirectorAssignmentStates(StatesGroup):

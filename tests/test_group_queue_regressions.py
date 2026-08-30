@@ -751,6 +751,107 @@ def test_customer_location_submission_sends_group_summary_and_location():
     run(scenario())
 
 
+def test_custom_cancellation_reason_is_saved_and_not_silent():
+    async def scenario():
+        engine, sessions, settings, scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            async with sessions() as session:
+                order = Order(
+                    customer_id=CUSTOMER_ID,
+                    worker_id=WORKER_ONE_ID,
+                    car_category="Sedan",
+                    car_model="Cancellation model",
+                    car_price=Decimal("100000"),
+                    status="ishchi_qabul_qildi",
+                )
+                session.add(order)
+                await session.commit()
+                order_id = order.id
+                worker = await session.get(Worker, WORKER_ONE_ID)
+                worker.status = "band"
+                await session.commit()
+            bot = RecordingBot()
+            state = RecordingState({"cancel_order_id": order_id})
+            message = RecordingMessage(bot, WORKER_ONE_ID, "Mijoz boshqa vaqtga qoldirdi")
+
+            await handler(router, "message", "custom_cancellation_reason")(
+                message, state
+            )
+
+            async with sessions() as session:
+                saved_order = await session.get(Order, order_id)
+                cancellation = await session.scalar(
+                    select(worker_handlers.Cancellation).where(
+                        worker_handlers.Cancellation.order_id == order_id
+                    )
+                )
+                worker = await session.get(Worker, WORKER_ONE_ID)
+            assert saved_order.status == "bekor_qilindi"
+            assert cancellation.reason == "Mijoz boshqa vaqtga qoldirdi"
+            assert worker.status == "bo'sh"
+            assert state.cleared
+            assert message.answer_calls
+            assert any(
+                call[1] == settings.director_id
+                and "Mijoz boshqa vaqtga qoldirdi" in str(call[2])
+                for call in bot.calls
+            )
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_director_can_safely_deactivate_worker_without_deleting_history():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            async with sessions() as session:
+                order = Order(
+                    customer_id=CUSTOMER_ID,
+                    worker_id=WORKER_ONE_ID,
+                    car_category="Sedan",
+                    car_model="Historical model",
+                    car_price=Decimal("100000"),
+                    status="yakunlandi",
+                )
+                session.add(order)
+                await session.commit()
+                order_id = order.id
+            bot = RecordingBot()
+
+            await handler(router, "message", "manage_workers")(
+                RecordingMessage(bot, DIRECTOR_ID, "👷 Ishchilarni boshqarish")
+            )
+            await handler(router, "callback_query", "choose_worker_management_action")(
+                RecordingCallback(
+                    f"worker_manage:deactivate:{WORKER_ONE_ID}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+            await handler(router, "callback_query", "deactivate_worker")(
+                RecordingCallback(
+                    f"worker_deactivate_confirm:{WORKER_ONE_ID}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+
+            async with sessions() as session:
+                worker = await session.get(Worker, WORKER_ONE_ID)
+                saved_order = await session.get(Order, order_id)
+            assert worker.active is False
+            assert worker.status == "smenada_emas"
+            assert saved_order is not None
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
 def test_single_worker_reject_releases_every_group_sibling():
     async def scenario():
         engine, sessions, _settings, _scheduler, router = await make_context()
@@ -831,6 +932,10 @@ def test_wash_timer_notifies_worker_without_releasing_group_assignment():
                 ),
                 state,
             )
+            await handler(router, "message", "receive_arrival_eta")(
+                RecordingMessage(bot, WORKER_ONE_ID, "25"),
+                state,
+            )
             await update_status(
                 RecordingCallback(
                     f"worker_status:arrived:{order_ids[0]}",
@@ -851,6 +956,7 @@ def test_wash_timer_notifies_worker_without_releasing_group_assignment():
             await expire_wash_timeout(order_ids[0])
             orders = await load_orders(sessions, order_ids)
             assert all(order.worker_id == WORKER_ONE_ID for order in orders)
+            assert orders[0].arrival_eta_minutes == 25
             assert orders[0].status == "yuvish_boshlandi"
             assert f"wash-timeout:{order_ids[0]}" in scheduler.jobs
             async with sessions() as session:
@@ -904,6 +1010,11 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
                     ),
                     state,
                 )
+                if stage == "route":
+                    await handler(router, "message", "receive_arrival_eta")(
+                        RecordingMessage(bot, WORKER_ONE_ID, "30"),
+                        state,
+                    )
             await update_status(
                 RecordingCallback(
                     f"worker_status:complete:{order_ids[0]}",
@@ -934,6 +1045,7 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             )
             orders = await load_orders(sessions, order_ids)
             assert orders[0].status == "yakunlandi"
+            assert orders[0].arrival_eta_minutes == 30
             assert orders[1].status == "ishchiga_yuborildi"
             assert orders[1].worker_id == WORKER_ONE_ID
             assert not scheduler.jobs

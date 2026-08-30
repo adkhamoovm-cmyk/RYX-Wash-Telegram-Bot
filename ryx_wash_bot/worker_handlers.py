@@ -26,6 +26,8 @@ from .keyboards import (
     wash_duration_keyboard,
     queue_offer_decision_keyboard,
     worker_cabinet_period_keyboard,
+    worker_deactivate_confirm_keyboard,
+    worker_management_keyboard,
     worker_menu_keyboard,
     worker_order_decision_keyboard,
     worker_payment_keyboard,
@@ -275,6 +277,7 @@ def _register_user_routes(
             if (
                 not order
                 or not worker
+                or not worker.active
                 or order.status != "navbatda"
                 or worker.status != "bo'sh"
                 or order.worker_id not in {None, worker_id}
@@ -340,7 +343,7 @@ def _register_user_routes(
     async def offer_next_queued_order(worker_id: int, bot) -> None:
         async with sessions() as session:
             worker = await session.get(Worker, worker_id)
-            if not worker or worker.status != "bo'sh":
+            if not worker or not worker.active or worker.status != "bo'sh":
                 return
             assigned_order = await session.scalar(
                 select(Order)
@@ -375,7 +378,7 @@ def _register_user_routes(
             if not queued_order:
                 return
             worker = await session.get(Worker, worker_id, with_for_update=True)
-            if not worker or worker.status != "bo'sh":
+            if not worker or not worker.active or worker.status != "bo'sh":
                 return
             customer = await session.get(User, queued_order.customer_id)
             queued_order.queue_offer_worker_id = worker_id
@@ -425,6 +428,7 @@ def _register_user_routes(
                 (
                     await session.scalars(
                         select(Worker)
+                        .where(Worker.active.is_(True))
                         .where(Worker.status.in_({"bo'sh", "band"}))
                         .order_by(Worker.name)
                     )
@@ -473,6 +477,7 @@ def _register_user_routes(
                 not lead_order
                 or not group_id
                 or not worker
+                or not worker.active
                 or worker.status not in {"bo'sh", "band"}
                 or not orders
                 or any(
@@ -535,6 +540,7 @@ def _register_user_routes(
             worker = await session.get(Worker, worker_id, with_for_update=True)
             if (
                 not worker
+                or not worker.active
                 or not lead_order
                 or not group_id
                 or worker.status not in {"bo'sh", "band"}
@@ -642,6 +648,121 @@ def _register_user_routes(
             reply_markup=ReplyKeyboardRemove(),
         )
 
+    @router.message(F.text == "👷 Ishchilarni boshqarish")
+    async def manage_workers(message: Message) -> None:
+        if not message.from_user:
+            return
+        async with sessions() as session:
+            if not await is_director(session, message.from_user.id):
+                await message.answer("❌ Bu bo'lim faqat direktor uchun.")
+                return
+            workers = list(
+                (
+                    await session.scalars(
+                        select(Worker).order_by(Worker.active.desc(), Worker.name)
+                    )
+                ).all()
+            )
+        if not workers:
+            await message.answer("📭 Hali ishchilar ro'yxatdan o'tmagan.")
+            return
+        await message.answer(
+            "👷 Ishchilar boshqaruvi:\n"
+            "Faol ishchini faolsizlantirish yoki oldingi ishchini qayta "
+            "faollashtirish uchun tanlang.",
+            reply_markup=worker_management_keyboard(workers),
+        )
+
+    @router.callback_query(F.data.startswith("worker_manage:"))
+    async def choose_worker_management_action(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        _, action, worker_id_raw = callback.data.split(":")
+        worker_id = int(worker_id_raw)
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+                return
+            worker = await session.get(Worker, worker_id)
+            if not worker:
+                await callback.answer("❌ Ishchi topilmadi.", show_alert=True)
+                return
+            worker_name = worker.name
+            is_active = worker.active
+        if action == "deactivate":
+            if not is_active:
+                await callback.answer("Ishchi allaqachon faol emas.", show_alert=True)
+                return
+            await callback.answer()
+            await callback.message.answer(
+                f"⚠️ «{_safe(worker_name)}» ishchisini faolsizlantirishni "
+                "tasdiqlaysizmi?",
+                reply_markup=worker_deactivate_confirm_keyboard(worker_id),
+            )
+            return
+        if action == "activate":
+            async with sessions() as session:
+                worker = await session.get(Worker, worker_id)
+                if not worker:
+                    await callback.answer("❌ Ishchi topilmadi.", show_alert=True)
+                    return
+                worker.active = True
+                worker.status = "smenada_emas"
+                await session.commit()
+            await callback.answer("✅ Ishchi qayta faollashtirildi.")
+            await callback.message.answer(
+                f"✅ {_safe(worker_name)} qayta faol qilindi."
+            )
+            return
+        await callback.answer("❌ Noto'g'ri amal.", show_alert=True)
+
+    @router.callback_query(F.data.startswith("worker_deactivate_confirm:"))
+    async def deactivate_worker(callback: CallbackQuery) -> None:
+        if not callback.from_user:
+            return
+        worker_id = int(callback.data.split(":", 1)[1])
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+                return
+            worker = await session.get(Worker, worker_id, with_for_update=True)
+            if not worker:
+                await callback.answer("❌ Ishchi topilmadi.", show_alert=True)
+                return
+            active_order = await session.scalar(
+                select(Order.id).where(
+                    Order.worker_id == worker_id,
+                    Order.status.not_in({"yakunlandi", "bekor_qilindi"}),
+                ).limit(1)
+            )
+            pending_offer = await session.scalar(
+                select(Order.id).where(
+                    Order.queue_offer_worker_id == worker_id,
+                    Order.status == "navbatda",
+                ).limit(1)
+            )
+            if active_order or pending_offer:
+                await callback.answer(
+                    "⚠️ Bu ishchida faol yoki navbatdagi buyurtma bor. "
+                    "Avval buyurtmani yakunlang yoki boshqa ishchiga bering.",
+                    show_alert=True,
+                )
+                return
+            worker.active = False
+            worker.status = "smenada_emas"
+            worker_name = worker.name
+            await session.commit()
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("✅ Ishchi faolsizlantirildi.")
+        await callback.message.answer(
+            f"✅ {_safe(worker_name)} faol ishchilar ro'yxatidan olib tashlandi."
+        )
+
+    @router.callback_query(F.data == "worker_manage_cancel")
+    async def cancel_worker_management(callback: CallbackQuery) -> None:
+        await callback.answer("Bekor qilindi.")
+        await callback.message.edit_reply_markup(reply_markup=None)
+
     @router.message(WorkerRegistrationStates.waiting_user_id, F.text)
     async def receive_worker_id(message: Message, state: FSMContext) -> None:
         try:
@@ -723,6 +844,8 @@ def _register_user_routes(
                 worker.name = data["name"]
                 worker.phone = data["phone"]
                 worker.share_percent = percent
+                worker.active = True
+                worker.status = "smenada_emas"
             await session.commit()
 
         await state.clear()
@@ -740,6 +863,9 @@ def _register_user_routes(
             worker = await get_worker(session, message.from_user.id)
             if worker is None:
                 await message.answer("❌ Siz ishchi sifatida ro'yxatdan o'tmagansiz.")
+                return
+            if not worker.active:
+                await message.answer("⚠️ Sizning ishchi profilingiz faol emas.")
                 return
             if worker.status == "band":
                 await message.answer("⚠️ Siz hozir buyurtma bilan bandsiz.")
@@ -764,6 +890,9 @@ def _register_user_routes(
             worker = await get_worker(session, message.from_user.id)
             if worker is None:
                 await message.answer("❌ Siz ishchi sifatida ro'yxatdan o'tmagansiz.")
+                return
+            if not worker.active:
+                await message.answer("⚠️ Sizning ishchi profilingiz faol emas.")
                 return
             if worker.status == "band":
                 await message.answer(
@@ -804,6 +933,7 @@ def _register_user_routes(
                 (
                     await session.scalars(
                         select(Worker)
+                        .where(Worker.active.is_(True))
                         .where(Worker.status == "bo'sh")
                         .order_by(Worker.name)
                     )
@@ -872,6 +1002,7 @@ def _register_user_routes(
                     await session.scalars(
                         select(Worker)
                         .join(Order, Order.worker_id == Worker.user_id)
+                        .where(Worker.active.is_(True))
                         .where(Worker.status == "band")
                         .where(Order.status.in_(ACTIVE_ACCEPTED_STATUSES))
                         .order_by(Worker.name)
@@ -900,6 +1031,7 @@ def _register_user_routes(
             if (
                 not order
                 or not worker
+                or not worker.active
                 or order.status not in {"yangi", "navbatda"}
                 or order.worker_id is not None
                 or worker.status != "band"
@@ -1063,6 +1195,7 @@ def _register_user_routes(
             if (
                 not order
                 or not worker
+                or not worker.active
                 or order.status not in {"yangi", "navbatda"}
                 or order.worker_id is not None
                 or worker.status != "bo'sh"
@@ -1145,6 +1278,7 @@ def _register_user_routes(
                 update(Worker)
                 .where(
                     Worker.user_id == worker_id,
+                    Worker.active.is_(True),
                     Worker.status == "bo'sh",
                 )
                 .values(status="band")
@@ -1657,6 +1791,23 @@ def _register_user_routes(
                     "Statuslarni ketma-ket yangilang.", show_alert=True
                 )
                 return
+            if stage == "route":
+                order.status = new_status
+                order.route_started_at = timestamp
+                worker_name = worker.name
+                model = order.car_model
+                plate = order.plate_number
+                await session.commit()
+                await state.set_state(WorkerOrderStates.waiting_arrival_eta)
+                await state.update_data(order_id=order_id)
+                await callback.message.edit_reply_markup(reply_markup=None)
+                await callback.message.answer(
+                    "🚗 Yo'lga chiqqaningiz belgilandi.\n"
+                    "⏱ Mijozga ko'rsatish uchun taxminiy yetib borish "
+                    "vaqtini butun daqiqalarda kiriting (1–1440):"
+                )
+                await callback.answer()
+                return
             order.status = new_status
             wash_duration = None
             if stage == "route":
@@ -1696,6 +1847,63 @@ def _register_user_routes(
                 f"Mijoz telefoni: <b>{_safe(customer.phone if customer else '—')}</b>"
             )
         await callback.answer()
+
+    @router.message(WorkerOrderStates.waiting_arrival_eta, F.text)
+    async def receive_arrival_eta(message: Message, state: FSMContext) -> None:
+        if not message.from_user:
+            return
+        raw_eta = message.text.strip()
+        if not raw_eta.isdigit() or not 1 <= int(raw_eta) <= 1440:
+            await message.answer(
+                "❌ Yetib borish vaqti 1 dan 1440 gacha bo'lgan butun "
+                "daqiqalarda bo'lsin."
+            )
+            return
+        eta_minutes = int(raw_eta)
+        data = await state.get_data()
+        order_id = data.get("order_id")
+        if not isinstance(order_id, int):
+            await state.clear()
+            await message.answer("❌ Buyurtma ma'lumoti topilmadi.")
+            return
+        async with sessions() as session:
+            order, worker = await worker_order_and_worker(
+                session, order_id, message.from_user.id
+            )
+            if (
+                not order
+                or not worker
+                or order.status != "yo'lda"
+            ):
+                await state.clear()
+                await message.answer(
+                    "❌ Buyurtma topilmadi yoki yo'lga chiqish bosqichi yopilgan."
+                )
+                return
+            order.arrival_eta_minutes = eta_minutes
+            customer_id = order.customer_id
+            model = order.car_model
+            plate = order.plate_number
+            worker_name = worker.name
+            await session.commit()
+        await state.clear()
+        eta_text = f"⏱ Taxminiy yetib kelish: <b>{eta_minutes} daqiqa</b>."
+        await notify_customer(
+            message.bot,
+            customer_id,
+            f"🚗 Ishchi yo'lga chiqdi.\n{eta_text}",
+        )
+        await message.bot.send_message(
+            settings.director_id,
+            f"<b>{_safe(worker_name)}</b> | {_safe(model)} | "
+            f"{_safe(_plate_display(plate))}\n"
+            f"🚗 Yo'lga chiqdi.\n{eta_text}",
+        )
+        await message.answer(
+            f"✅ ETA saqlandi.\n{eta_text}\n"
+            "Manzilga yetganingizda quyidagi tugmani bosing:",
+            reply_markup=worker_status_keyboard(order_id, "arrived"),
+        )
 
     @router.message(WorkerOrderStates.waiting_plate, F.text)
     async def receive_order_plate(message: Message, state: FSMContext) -> None:
