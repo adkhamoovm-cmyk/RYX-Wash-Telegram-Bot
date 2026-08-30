@@ -55,3 +55,16 @@ The initial vehicle catalog and prices are in `ryx_wash_bot/catalog.py`.
   yes/no prompt for the oldest global queued order.
 - Rejected or expired queued offers return to the global queue and can be
   reassigned through the original **Ishchilarga yuborish** button.
+
+## Director-created orders
+
+- The director can create an order for a customer who called by phone.
+- The flow requires customer name, a normalized `+998` phone number, catalog
+  category/model, plate number, one reference car photo, payment method, and
+  either Telegram coordinates or a written address.
+- Existing customers are reused by normalized phone number. Customers without
+  Telegram receive an internal negative identifier and are never sent Telegram
+  messages.
+- The reference car photo is stored separately from the worker's before/after
+  completion photos and is shown to the worker after accepting the order.
+- Created orders reuse the existing worker assignment and queue controls.

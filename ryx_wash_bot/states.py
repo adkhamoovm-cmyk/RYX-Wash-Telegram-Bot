@@ -13,6 +13,19 @@ class OrderStates(StatesGroup):
     waiting_comment = State()
 
 
+class ManualOrderStates(StatesGroup):
+    waiting_customer_name = State()
+    waiting_customer_phone = State()
+    waiting_car_category = State()
+    waiting_car_model = State()
+    waiting_plate = State()
+    waiting_car_photo = State()
+    waiting_payment = State()
+    waiting_location = State()
+    waiting_address = State()
+    waiting_comment = State()
+
+
 class WorkerRegistrationStates(StatesGroup):
     waiting_user_id = State()
     waiting_name = State()

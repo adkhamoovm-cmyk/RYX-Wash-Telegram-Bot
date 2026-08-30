@@ -1,2 +1,3 @@
 - [Asyncpg hosted PostgreSQL URLs](asyncpg-hosted-postgres.md) — normalize hosted URL SSL parameters before creating an async SQLAlchemy engine.
 - [Persistent worker-offer timeouts](persistent-offer-timeouts.md) — keep offer expirations in PostgreSQL-backed APScheduler jobs, never process-local sleeps.
+- [Offline customer identity](offline-customer-identity.md) — phone-call customers use negative internal IDs and must never receive Telegram API messages.

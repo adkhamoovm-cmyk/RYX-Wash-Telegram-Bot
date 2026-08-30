@@ -124,11 +124,12 @@ def _register_user_routes(
                 f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
                 f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
                 f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                f"<b>Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
                 f"<b>Izoh:</b> {_safe(order.comment or '—')}\n\n"
                 "Buyurtmani qabul qilasizmi?"
             )
-            latitude = float(order.latitude)
-            longitude = float(order.longitude)
+            latitude = float(order.latitude) if order.latitude is not None else None
+            longitude = float(order.longitude) if order.longitude is not None else None
             await session.commit()
         schedule_offer_timeout(scheduler, order_id, assigned_at)
         await bot.send_message(
@@ -136,11 +137,12 @@ def _register_user_routes(
             text,
             reply_markup=worker_order_decision_keyboard(order_id),
         )
-        await bot.send_location(
-            worker_id,
-            latitude=latitude,
-            longitude=longitude,
-        )
+        if latitude is not None and longitude is not None:
+            await bot.send_location(
+                worker_id,
+                latitude=latitude,
+                longitude=longitude,
+            )
         return True
 
     async def offer_next_queued_order(worker_id: int, bot) -> None:
@@ -664,22 +666,42 @@ def _register_user_routes(
                 f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
                 f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
                 f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                f"<b>Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
                 f"<b>Izoh:</b> {_safe(order.comment or '—')}"
             )
-            latitude, longitude = float(order.latitude), float(order.longitude)
+            latitude = float(order.latitude) if order.latitude is not None else None
+            longitude = float(order.longitude) if order.longitude is not None else None
+            address = order.address
+            car_photo_id = order.car_photo_id
+            customer_id = order.customer_id
         remove_offer_timeout(scheduler, order_id)
-        await callback.bot.send_message(
-            order.customer_id,
-            "Buyurtmangiz ishchiga biriktirildi. Xizmat jarayoni boshlanganda xabar beramiz.",
-        )
+        if customer_id > 0:
+            await callback.bot.send_message(
+                customer_id,
+                "Buyurtmangiz ishchiga biriktirildi. "
+                "Xizmat jarayoni boshlanganda xabar beramiz.",
+            )
         await callback.message.edit_text(full_text)
         await callback.message.answer(
-            "Lokatsiya:",
+            (
+                "Lokatsiya:"
+                if latitude is not None and longitude is not None
+                else f"Manzil: {_safe(address or '—')}"
+            ),
             reply_markup=worker_status_keyboard(order_id, "route"),
         )
-        await callback.bot.send_location(
-            callback.from_user.id, latitude=latitude, longitude=longitude
-        )
+        if latitude is not None and longitude is not None:
+            await callback.bot.send_location(
+                callback.from_user.id,
+                latitude=latitude,
+                longitude=longitude,
+            )
+        if car_photo_id:
+            await callback.bot.send_photo(
+                callback.from_user.id,
+                car_photo_id,
+                caption=f"Buyurtma #{order_id} boshlang'ich mashina rasmi",
+            )
         await callback.bot.send_message(
             settings.director_id,
             f"{_safe(worker.name)} buyurtma #{order_id} ni qabul qildi.",
@@ -1048,10 +1070,12 @@ def _register_user_routes(
             after_photo_id,
             caption="Keyin",
         )
-        await message.bot.send_message(
-            customer_id,
-            "Buyurtmangiz yakunlandi. RYX Wash xizmatidan foydalanganingiz uchun rahmat!",
-        )
+        if customer_id > 0:
+            await message.bot.send_message(
+                customer_id,
+                "Buyurtmangiz yakunlandi. "
+                "RYX Wash xizmatidan foydalanganingiz uchun rahmat!",
+            )
         await offer_next_queued_order(message.from_user.id, message.bot)
         await state.clear()
 

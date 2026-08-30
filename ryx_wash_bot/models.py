@@ -69,9 +69,11 @@ class Order(Base):
     car_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     plate_number: Mapped[str] = mapped_column(String(30), nullable=False)
     payment_method: Mapped[str] = mapped_column(String(20), nullable=False)
-    latitude: Mapped[Decimal] = mapped_column(Numeric(10, 7), nullable=False)
-    longitude: Mapped[Decimal] = mapped_column(Numeric(10, 7), nullable=False)
+    latitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 7), nullable=True)
+    longitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 7), nullable=True)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    address: Mapped[str | None] = mapped_column(Text, nullable=True)
+    car_photo_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="yangi")
     queued_offer: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="false"

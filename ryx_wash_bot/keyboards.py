@@ -19,6 +19,7 @@ def customer_menu_keyboard() -> ReplyKeyboardMarkup:
 def director_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.add(KeyboardButton(text="Ishchi qo'shish"))
+    builder.add(KeyboardButton(text="Qo'lda buyurtma qo'shish"))
     return builder.as_markup(resize_keyboard=True)
 
 
@@ -39,12 +40,31 @@ def category_keyboard():
     return builder.as_markup()
 
 
+def manual_category_keyboard():
+    builder = InlineKeyboardBuilder()
+    for category in categories():
+        builder.button(text=category, callback_data=f"manual_category:{category}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
 def model_keyboard(category: str):
     builder = InlineKeyboardBuilder()
     for model in models_for_category(category):
         builder.button(
             text=f"{model.name} — {format_price(model.price)}",
             callback_data=f"model:{model.id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def manual_model_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    for model in models_for_category(category):
+        builder.button(
+            text=f"{model.name} — {format_price(model.price)}",
+            callback_data=f"manual_model:{model.id}",
         )
     builder.adjust(1)
     return builder.as_markup()
@@ -61,6 +81,13 @@ def payment_keyboard():
 def location_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.add(KeyboardButton(text="Lokatsiyamni yuborish", request_location=True))
+    return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
+
+
+def manual_location_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.add(KeyboardButton(text="Lokatsiyani yuborish", request_location=True))
+    builder.add(KeyboardButton(text="Manzilni matn qilib yozish"))
     return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
 
 

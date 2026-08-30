@@ -42,7 +42,18 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS worker_comment TEXT
                     ,
                     ADD COLUMN IF NOT EXISTS queued_offer BOOLEAN NOT NULL DEFAULT FALSE,
-                    ADD COLUMN IF NOT EXISTS queue_prompted_at TIMESTAMPTZ
+                    ADD COLUMN IF NOT EXISTS queue_prompted_at TIMESTAMPTZ,
+                    ADD COLUMN IF NOT EXISTS address TEXT,
+                    ADD COLUMN IF NOT EXISTS car_photo_id VARCHAR(255)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE orders
+                    ALTER COLUMN latitude DROP NOT NULL,
+                    ALTER COLUMN longitude DROP NOT NULL
                 """
             )
         )

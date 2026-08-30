@@ -42,10 +42,11 @@ Customers register with their name and Telegram contact, select a car and paymen
 The director can register workers and assign orders to available staff. Workers manage shifts, accept or reject assignments, report progress, and finish with before/after photos.
 Worker offers expire after three minutes even across bot restarts. Directors and assigned workers can cancel active orders with a required reason.
 When everyone is busy, orders can enter a global FIFO queue or a worker-specific queue. A worker never receives a second active order; queued details open only after the current order ends.
+The director can create phone-call orders manually. These require a plate and reference car photo, accept either Telegram coordinates or a written address, and reuse customers by normalized phone number.
 
 ## User preferences
 
-- Do not add manual director orders or multiple customer vehicles until requested.
+- Do not add multiple customer vehicles until requested.
 
 ## Gotchas
 
