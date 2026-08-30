@@ -24,6 +24,7 @@ def director_menu_keyboard() -> ReplyKeyboardMarkup:
     builder.add(KeyboardButton(text="Narxlarni boshqarish"))
     builder.add(KeyboardButton(text="Xarajat qo'shish"))
     builder.add(KeyboardButton(text="Hisobot"))
+    builder.add(KeyboardButton(text="Mijozlar bazasi"))
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
@@ -72,6 +73,39 @@ def report_workers_keyboard(workers: list):
             text=worker.name[:60],
             callback_data=f"report_worker:{worker.user_id}",
         )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def crm_menu_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Eng faol mijozlar", callback_data="crm_top")
+    builder.button(text="Mijozni qidirish", callback_data="crm_search")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def crm_customers_keyboard(customers: list):
+    builder = InlineKeyboardBuilder()
+    for customer in customers:
+        name = customer.name or "Nomsiz mijoz"
+        phone = customer.phone or "telefon yo'q"
+        builder.button(
+            text=f"{name} | {phone}"[:60],
+            callback_data=f"crm_customer:{customer.telegram_id}",
+        )
+    builder.button(text="Mijozlar bazasi menyusi", callback_data="crm_menu")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def crm_card_keyboard(phone: str | None):
+    builder = InlineKeyboardBuilder()
+    if phone:
+        normalized = phone.strip().replace(" ", "").replace("(", "").replace(")", "")
+        builder.button(text="Telefon qilish", url=f"tel:{normalized}")
+    builder.button(text="Mijozni qidirish", callback_data="crm_search")
+    builder.button(text="Eng faol mijozlar", callback_data="crm_top")
     builder.adjust(1)
     return builder.as_markup()
 

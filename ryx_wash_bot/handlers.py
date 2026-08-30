@@ -11,7 +11,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -29,6 +29,9 @@ from .config import Settings
 from .keyboards import (
     category_keyboard,
     contact_keyboard,
+    crm_card_keyboard,
+    crm_customers_keyboard,
+    crm_menu_keyboard,
     customer_menu_keyboard,
     director_menu_keyboard,
     group_mode_keyboard,
@@ -57,6 +60,7 @@ from .states import (
     PriceManagementStates,
     RegistrationStates,
     ReportStates,
+    CrmStates,
 )
 from .worker_handlers import register_worker_routes
 
@@ -348,6 +352,232 @@ def _new_router(
         async with session_factory() as session:
             user = await find_user(session, user_id)
             return bool(user and user.rol == "direktor")
+
+    async def crm_top_customers() -> list[tuple[User, int, Decimal]]:
+        paid_sum = func.coalesce(
+            func.sum(
+                case(
+                    (Order.status == "yakunlandi", Order.car_price),
+                    else_=0,
+                )
+            ),
+            0,
+        )
+        order_count = func.count(Order.id)
+        async with session_factory() as session:
+            rows = (
+                await session.execute(
+                    select(User, order_count, paid_sum)
+                    .join(Order, Order.customer_id == User.telegram_id)
+                    .where(User.rol == "mijoz")
+                    .group_by(User.telegram_id)
+                    .order_by(order_count.desc(), paid_sum.desc(), User.name)
+                    .limit(15)
+                )
+            ).all()
+        return [
+            (customer, int(count or 0), Decimal(str(total or 0)))
+            for customer, count, total in rows
+        ]
+
+    async def crm_customer_card(
+        customer_id: int,
+    ) -> tuple[str, str | None] | None:
+        async with session_factory() as session:
+            customer = await session.get(User, customer_id)
+            if not customer or customer.rol != "mijoz":
+                return None
+            cars = list(
+                (
+                    await session.scalars(
+                        select(CustomerCar)
+                        .where(CustomerCar.customer_id == customer_id)
+                        .order_by(CustomerCar.created_at, CustomerCar.id)
+                    )
+                ).all()
+            )
+            orders = list(
+                (
+                    await session.scalars(
+                        select(Order)
+                        .where(Order.customer_id == customer_id)
+                        .order_by(Order.created_at.desc(), Order.id.desc())
+                    )
+                ).all()
+            )
+
+        status_labels = {
+            "yakunlandi": "yakunlandi",
+            "bekor_qilindi": "bekor qilindi",
+        }
+        lines = [
+            "<b>Mijoz kartochkasi</b>",
+            "",
+            f"<b>Ism:</b> {_safe(customer.name or '—')}",
+            f"<b>Telefon:</b> {_safe(customer.phone or '—')}",
+            "",
+            "<b>Saqlangan mashinalar:</b>",
+        ]
+        if not cars:
+            lines.append("Saqlangan mashinalar yo'q.")
+        else:
+            for car in cars:
+                lines.append(
+                    f"• {_safe(car.car_category)} / {_safe(car.model)} | "
+                    f"{_safe(car.plate_number)}"
+                )
+
+        lines.extend(["", "<b>Buyurtmalar tarixi:</b>"])
+        if not orders:
+            lines.append("Buyurtmalar yo'q.")
+        else:
+            for order in orders:
+                order_date = order.created_at.astimezone(TASHKENT)
+                status = status_labels.get(order.status, order.status)
+                lines.append(
+                    f"• {order_date:%d.%m.%Y} | {_safe(order.car_model)} | "
+                    f"{_safe(format_price(int(order.car_price)))} | "
+                    f"{_safe(status)}"
+                )
+        return "\n".join(lines), customer.phone
+
+    async def send_crm_customer_card(target: Message, customer_id: int) -> None:
+        card = await crm_customer_card(customer_id)
+        if card is None:
+            await target.answer("Mijoz topilmadi.")
+            return
+        text, phone = card
+        chunks: list[str] = []
+        current = ""
+        for line in text.splitlines():
+            addition = line if not current else f"{current}\n{line}"
+            if current and len(addition) > 3800:
+                chunks.append(current)
+                current = line
+            else:
+                current = addition
+        if current:
+            chunks.append(current)
+        for index, chunk in enumerate(chunks):
+            await target.answer(
+                chunk,
+                reply_markup=crm_card_keyboard(phone) if index == 0 else None,
+            )
+
+    @router.message(F.text == "Mijozlar bazasi")
+    async def open_crm(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await message.answer("Bu bo'lim faqat direktor uchun.")
+            return
+        await state.clear()
+        await message.answer(
+            "Mijozlar bazasi:",
+            reply_markup=crm_menu_keyboard(),
+        )
+
+    @router.callback_query(F.data == "crm_menu")
+    async def crm_menu(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        await state.clear()
+        await callback.answer()
+        await callback.message.answer(
+            "Mijozlar bazasi:",
+            reply_markup=crm_menu_keyboard(),
+        )
+
+    @router.callback_query(F.data == "crm_top")
+    async def show_crm_top(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        await state.clear()
+        rows = await crm_top_customers()
+        await callback.answer()
+        if not rows:
+            await callback.message.answer("Buyurtma qilgan mijozlar hali yo'q.")
+            return
+        lines = ["<b>Eng faol mijozlar — top-15</b>", ""]
+        for index, (customer, count, total) in enumerate(rows, 1):
+            lines.append(
+                f"<b>{index}. {_safe(customer.name or 'Nomsiz mijoz')}</b>\n"
+                f"Telefon: {_safe(customer.phone or '—')}\n"
+                f"Buyurtmalar: {count} ta | "
+                f"Jami to'lagan: {_safe(format_price(int(total)))}"
+            )
+        await callback.message.answer(
+            "\n\n".join(lines),
+            reply_markup=crm_customers_keyboard([row[0] for row in rows]),
+        )
+
+    @router.callback_query(F.data == "crm_search")
+    async def start_crm_search(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        await state.set_state(CrmStates.waiting_search)
+        await callback.answer()
+        await callback.message.answer(
+            "Mijozning ism yoki telefon raqamini kiriting:"
+        )
+
+    @router.message(CrmStates.waiting_search, F.text)
+    async def search_crm_customers(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("Bu bo'lim faqat direktor uchun.")
+            return
+        search_term = " ".join(message.text.split())
+        if len(search_term) < 2:
+            await message.answer("Kamida 2 ta belgi kiriting.")
+            return
+        name_term = search_term.lower()
+        phone_digits = re.sub(r"\D", "", search_term)
+        conditions = [
+            func.lower(User.name).contains(name_term),
+            func.lower(User.phone).contains(name_term),
+        ]
+        if phone_digits:
+            conditions.append(
+                func.regexp_replace(User.phone, "[^0-9]", "", "g").contains(
+                    phone_digits
+                )
+            )
+        async with session_factory() as session:
+            customers = list(
+                (
+                    await session.scalars(
+                        select(User)
+                        .where(User.rol == "mijoz", or_(*conditions))
+                        .order_by(User.name, User.telegram_id)
+                        .limit(30)
+                    )
+                ).all()
+            )
+        if not customers:
+            await message.answer("Mos mijoz topilmadi. Qidiruvni qayta kiriting.")
+            return
+        await state.clear()
+        await message.answer(
+            f"{len(customers)} ta mijoz topildi:",
+            reply_markup=crm_customers_keyboard(customers),
+        )
+
+    @router.callback_query(F.data.startswith("crm_customer:"))
+    async def show_crm_customer(callback: CallbackQuery) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        try:
+            customer_id = int(callback.data.split(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer("Mijoz identifikatori noto'g'ri.", show_alert=True)
+            return
+        await callback.answer()
+        await send_crm_customer_card(callback.message, customer_id)
 
     async def active_service_models(session: AsyncSession) -> list[ServiceModel]:
         return list(

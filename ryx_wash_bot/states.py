@@ -23,6 +23,10 @@ class ReportStates(StatesGroup):
     waiting_worker = State()
 
 
+class CrmStates(StatesGroup):
+    waiting_search = State()
+
+
 class OrderStates(StatesGroup):
     waiting_car_choice = State()
     waiting_car_category = State()
