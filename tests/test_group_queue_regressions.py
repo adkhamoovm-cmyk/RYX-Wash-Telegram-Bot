@@ -657,9 +657,9 @@ def test_worker_enters_missing_manual_order_plate_after_washing():
                 assert order is not None
                 assert order.payment_method == "Karta"
                 assert order.status == "yakunlanmoqda"
-            assert state.cleared is True
+            assert state.cleared is False
             assert any(
-                "yakuniy rasmlarni yuboring" in str(text)
+                "Oldin" in str(text)
                 for text, _ in payment_callback.message.answer_calls
             )
             before = handler(router, "message", "receive_before_photo")
