@@ -34,3 +34,17 @@ class Settings(BaseSettings):
         return urlunsplit(
             (parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment)
         )
+
+    @property
+    def sync_database_url(self) -> str:
+        """Return a psycopg URL for APScheduler's synchronous SQLAlchemy job store."""
+        url = self.database_url
+        if url.startswith("postgres://"):
+            return "postgresql+psycopg://" + url.removeprefix("postgres://")
+        if url.startswith("postgresql://"):
+            return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+        if url.startswith("postgresql+asyncpg://"):
+            return "postgresql+psycopg://" + url.removeprefix(
+                "postgresql+asyncpg://"
+            )
+        return url

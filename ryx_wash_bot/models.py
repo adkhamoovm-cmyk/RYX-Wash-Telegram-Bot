@@ -30,11 +30,13 @@ class Worker(Base):
     user_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.telegram_id"), primary_key=True
     )
-    name: Mapped[str] = mapped_column(String(150), nullable=False)
-    phone: Mapped[str] = mapped_column(String(40), nullable=False)
-    share_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False)
+    name: Mapped[str] = mapped_column("ism", String(150), nullable=False)
+    phone: Mapped[str] = mapped_column("telefon", String(40), nullable=False)
+    share_percent: Mapped[Decimal] = mapped_column(
+        "foiz", Numeric(5, 2), nullable=False
+    )
     status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="smenada_emas"
+        "holat", String(20), nullable=False, default="smenada_emas"
     )
     shift_started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -93,3 +95,22 @@ class Order(Base):
 
     customer: Mapped[User] = relationship(back_populates="orders")
     worker: Mapped[Worker | None] = relationship(back_populates="orders")
+    cancellations: Mapped[list["Cancellation"]] = relationship(back_populates="order")
+
+
+class Cancellation(Base):
+    __tablename__ = "cancellations"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("orders.id"), nullable=False, index=True
+    )
+    reason: Mapped[str] = mapped_column("sabab", Text, nullable=False)
+    cancelled_by: Mapped[int] = mapped_column(
+        "kim_bekor_qildi", BigInteger, nullable=False
+    )
+    cancelled_at: Mapped[datetime] = mapped_column(
+        "vaqt", DateTime(timezone=True), nullable=False
+    )
+
+    order: Mapped[Order] = relationship(back_populates="cancellations")

@@ -42,6 +42,113 @@ async def create_tables(engine: AsyncEngine) -> None:
                 """
             )
         )
+        await connection.execute(
+            text(
+                """
+                DO $$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'workers'
+                          AND column_name = 'name'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'workers'
+                          AND column_name = 'ism'
+                    ) THEN
+                        ALTER TABLE workers RENAME COLUMN name TO ism;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'workers'
+                          AND column_name = 'phone'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'workers'
+                          AND column_name = 'telefon'
+                    ) THEN
+                        ALTER TABLE workers RENAME COLUMN phone TO telefon;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'workers'
+                          AND column_name = 'share_percent'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'workers'
+                          AND column_name = 'foiz'
+                    ) THEN
+                        ALTER TABLE workers RENAME COLUMN share_percent TO foiz;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'workers'
+                          AND column_name = 'status'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'workers'
+                          AND column_name = 'holat'
+                    ) THEN
+                        ALTER TABLE workers RENAME COLUMN status TO holat;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'cancellations'
+                          AND column_name = 'reason'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'cancellations'
+                          AND column_name = 'sabab'
+                    ) THEN
+                        ALTER TABLE cancellations RENAME COLUMN reason TO sabab;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'cancellations'
+                          AND column_name = 'cancelled_by'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'cancellations'
+                          AND column_name = 'kim_bekor_qildi'
+                    ) THEN
+                        ALTER TABLE cancellations
+                            RENAME COLUMN cancelled_by TO kim_bekor_qildi;
+                    END IF;
+
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'cancellations'
+                          AND column_name = 'cancelled_at'
+                    ) AND NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'cancellations'
+                          AND column_name = 'vaqt'
+                    ) THEN
+                        ALTER TABLE cancellations RENAME COLUMN cancelled_at TO vaqt;
+                    END IF;
+                END $$;
+                """
+            )
+        )
 
 
 @asynccontextmanager

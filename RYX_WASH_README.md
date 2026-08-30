@@ -34,3 +34,12 @@ The initial vehicle catalog and prices are in `ryx_wash_bot/catalog.py`.
   the worker reaches the customer's location.
 - Completion requires sequential **Oldin** and **Keyin** photos and a short
   comment. The final report time uses the `Asia/Tashkent` timezone.
+
+## Offer timeout and cancellation
+
+- Worker offers expire after three minutes. APScheduler stores timeout jobs in
+  PostgreSQL, so pending timeouts survive bot restarts.
+- An expired offer cannot be accepted later; the worker becomes available
+  again and the director can resend the original order.
+- Directors and the worker assigned to an order can cancel it. A predefined or
+  custom non-empty reason is stored in the `cancellations` table.

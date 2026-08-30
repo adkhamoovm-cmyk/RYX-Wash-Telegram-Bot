@@ -8,6 +8,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -15,13 +16,20 @@ from .catalog import format_price
 from .config import Settings
 from .keyboards import (
     available_workers_keyboard,
+    cancellation_reasons_keyboard,
+    cancel_only_keyboard,
     director_menu_keyboard,
     worker_menu_keyboard,
     worker_order_decision_keyboard,
     worker_status_keyboard,
 )
-from .models import Order, User, Worker
-from .states import WorkerCompletionStates, WorkerRegistrationStates
+from .models import Cancellation, Order, User, Worker
+from .scheduler import remove_offer_timeout, schedule_offer_timeout
+from .states import (
+    CancellationStates,
+    WorkerCompletionStates,
+    WorkerRegistrationStates,
+)
 
 logger = logging.getLogger(__name__)
 TASHKENT = ZoneInfo("Asia/Tashkent")
@@ -50,6 +58,7 @@ def _register_user_routes(
     router: Router,
     sessions: async_sessionmaker[AsyncSession],
     settings: Settings,
+    scheduler: AsyncIOScheduler,
 ) -> None:
     async def find_user(session: AsyncSession, user_id: int) -> User | None:
         return await session.scalar(select(User).where(User.telegram_id == user_id))
@@ -225,6 +234,13 @@ def _register_user_routes(
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
+            order = await session.get(Order, order_id)
+            if not order or order.status != "yangi" or order.worker_id is not None:
+                await callback.answer(
+                    "Buyurtma hozir ishchiga yuborish uchun tayyor emas.",
+                    show_alert=True,
+                )
+                return
             workers = list(
                 (
                     await session.scalars(
@@ -275,6 +291,7 @@ def _register_user_routes(
             order.status = "ishchiga_yuborildi"
             worker.status = "band"
             await session.commit()
+            assigned_at = order.assigned_at
             worker_name = worker.name
             worker_phone = worker.phone
             customer = await session.get(User, order.customer_id)
@@ -286,13 +303,16 @@ def _register_user_routes(
                 f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n\n"
                 "Buyurtmani qabul qilasizmi?"
             )
+        schedule_offer_timeout(scheduler, order_id, assigned_at)
         await callback.bot.send_message(
             worker_id,
             worker_text,
             reply_markup=worker_order_decision_keyboard(order_id),
         )
         await callback.answer()
-        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.edit_reply_markup(
+            reply_markup=cancel_only_keyboard(order_id)
+        )
         await callback.message.answer(
             f"Buyurtma #{order_id} {worker_name} ishchiga yuborildi."
         )
@@ -340,6 +360,7 @@ def _register_user_routes(
                 f"<b>Izoh:</b> {_safe(order.comment or '—')}"
             )
             latitude, longitude = float(order.latitude), float(order.longitude)
+        remove_offer_timeout(scheduler, order_id)
         await callback.bot.send_message(
             order.customer_id,
             "Buyurtmangiz ishchiga biriktirildi. Xizmat jarayoni boshlanganda xabar beramiz.",
@@ -381,12 +402,167 @@ def _register_user_routes(
             order.status = "yangi"
             worker_name = worker.name
             await session.commit()
+        remove_offer_timeout(scheduler, order_id)
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.bot.send_message(
             settings.director_id,
             f"{_safe(worker_name)} rad etdi (buyurtma #{order_id}).",
         )
         await callback.answer("Buyurtma rad etildi.")
+
+    async def can_cancel(
+        session: AsyncSession,
+        order: Order,
+        actor_id: int,
+    ) -> bool:
+        actor = await find_user(session, actor_id)
+        if actor and actor.rol == "direktor":
+            return True
+        return bool(actor and actor.rol == "ishchi" and order.worker_id == actor_id)
+
+    @router.callback_query(F.data.startswith("cancel_order:"))
+    async def request_cancellation(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        order_id = int(callback.data.split(":", 1)[1])
+        async with sessions() as session:
+            order = await session.get(Order, order_id)
+            if not order:
+                await callback.answer("Buyurtma topilmadi.", show_alert=True)
+                return
+            if order.status in {"yakunlandi", "bekor_qilindi"}:
+                await callback.answer(
+                    "Bu buyurtmani bekor qilib bo'lmaydi.", show_alert=True
+                )
+                return
+            if not await can_cancel(session, order, callback.from_user.id):
+                await callback.answer(
+                    "Bu buyurtmani bekor qilish huquqingiz yo'q.", show_alert=True
+                )
+                return
+        await state.set_state(CancellationStates.waiting_reason)
+        await state.update_data(cancel_order_id=order_id)
+        await callback.answer()
+        await callback.message.answer(
+            f"Buyurtma #{order_id} ni bekor qilish sababini tanlang:",
+            reply_markup=cancellation_reasons_keyboard(order_id),
+        )
+
+    async def finalize_cancellation(
+        actor_id: int,
+        order_id: int,
+        reason: str,
+        bot,
+    ) -> bool:
+        reason = reason.strip()
+        if not reason:
+            return False
+        async with sessions() as session:
+            order = await session.get(Order, order_id)
+            if (
+                not order
+                or order.status in {"yakunlandi", "bekor_qilindi"}
+                or not await can_cancel(session, order, actor_id)
+            ):
+                return False
+            worker_id = order.worker_id
+            if worker_id:
+                worker = await session.get(Worker, worker_id)
+                if worker:
+                    worker.status = "bo'sh"
+            order.status = "bekor_qilindi"
+            session.add(
+                Cancellation(
+                    order_id=order.id,
+                    reason=reason,
+                    cancelled_by=actor_id,
+                    cancelled_at=now_tashkent(),
+                )
+            )
+            await session.commit()
+        remove_offer_timeout(scheduler, order_id)
+        await bot.send_message(
+            settings.director_id,
+            f"Buyurtma #{order_id} bekor qilindi. Sabab: {_safe(reason)}",
+        )
+        if worker_id and worker_id != actor_id:
+            await bot.send_message(
+                worker_id,
+                f"Buyurtma #{order_id} bekor qilindi. Sabab: {_safe(reason)}",
+            )
+        return True
+
+    @router.callback_query(
+        CancellationStates.waiting_reason,
+        F.data.startswith("cancel_reason:"),
+    )
+    async def choose_cancellation_reason(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        _, order_id_raw, reason_code = callback.data.split(":")
+        order_id = int(order_id_raw)
+        data = await state.get_data()
+        if data.get("cancel_order_id") != order_id:
+            await callback.answer("Bekor qilish ma'lumoti eskirgan.", show_alert=True)
+            return
+        if reason_code == "other":
+            await state.set_state(CancellationStates.waiting_custom_reason)
+            await callback.answer()
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer(
+                "Bekor qilish sababini matn ko'rinishida yozing:"
+            )
+            return
+        reasons = {
+            "customer": "Mijoz voz kechdi",
+            "location": "Manzil noto'g'ri/topilmadi",
+            "worker": "Ishchi yetib bora olmadi",
+        }
+        reason = reasons.get(reason_code)
+        if not reason:
+            await callback.answer("Noto'g'ri sabab.", show_alert=True)
+            return
+        completed = await finalize_cancellation(
+            callback.from_user.id, order_id, reason, callback.bot
+        )
+        await state.clear()
+        await callback.message.edit_reply_markup(reply_markup=None)
+        if completed:
+            await callback.answer("Buyurtma bekor qilindi.")
+        else:
+            await callback.answer(
+                "Buyurtmani bekor qilib bo'lmadi.", show_alert=True
+            )
+
+    @router.message(CancellationStates.waiting_custom_reason, F.text)
+    async def custom_cancellation_reason(
+        message: Message, state: FSMContext
+    ) -> None:
+        reason = message.text.strip()
+        if not reason:
+            await message.answer("Sabab majburiy. Iltimos, sababni yozing:")
+            return
+        if len(reason) > 2000:
+            await message.answer("Sabab 2000 belgidan oshmasin.")
+            return
+        data = await state.get_data()
+        order_id = data.get("cancel_order_id")
+        if not isinstance(order_id, int):
+            await state.clear()
+            await message.answer("Bekor qilish ma'lumoti topilmadi.")
+            return
+        completed = await finalize_cancellation(
+            message.from_user.id, order_id, reason, message.bot
+        )
+        await state.clear()
+        if completed:
+            await message.answer(f"Buyurtma #{order_id} bekor qilindi.")
+        else:
+            await message.answer("Buyurtmani bekor qilib bo'lmadi.")
+
+    @router.message(CancellationStates.waiting_custom_reason)
+    async def require_custom_cancellation_reason(message: Message) -> None:
+        await message.answer("Sabab majburiy. Uni matn ko'rinishida yozing:")
 
     @router.callback_query(F.data.startswith("worker_status:"))
     async def update_worker_status(callback: CallbackQuery, state: FSMContext) -> None:
@@ -508,7 +684,13 @@ def _register_user_routes(
         async with sessions() as session:
             order = await session.get(Order, data["order_id"])
             worker = await get_worker(session, message.from_user.id)
-            if not order or not worker or order.worker_id != message.from_user.id:
+            if (
+                not order
+                or not worker
+                or order.worker_id != message.from_user.id
+                or order.status != "yakunlanmoqda"
+            ):
+                await state.clear()
                 await message.answer("Buyurtma topilmadi yoki sizga tegishli emas.")
                 return
             customer = await session.get(User, order.customer_id)
@@ -571,5 +753,6 @@ def register_worker_routes(
     router: Router,
     sessions: async_sessionmaker[AsyncSession],
     settings: Settings,
+    scheduler: AsyncIOScheduler,
 ) -> None:
-    _register_user_routes(router, sessions, settings)
+    _register_user_routes(router, sessions, settings, scheduler)

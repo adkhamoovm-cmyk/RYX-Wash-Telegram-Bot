@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from .catalog import format_price, get_model
 from .config import Settings
@@ -36,7 +37,9 @@ def _safe(value: object) -> str:
 
 
 def _new_router(
-    session_factory: async_sessionmaker[AsyncSession], settings: Settings
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    scheduler: AsyncIOScheduler,
 ) -> Router:
     router = Router(name="ryx-wash")
 
@@ -343,5 +346,5 @@ def _new_router(
             return
         await save_and_notify(message, state, comment)
 
-    register_worker_routes(router, session_factory, settings)
+    register_worker_routes(router, session_factory, settings, scheduler)
     return router

@@ -18,6 +18,7 @@ Telegram bot that registers car wash customers and sends new service orders to t
 - API: Express 5
 - DB: PostgreSQL + Drizzle ORM
 - Bot: Python 3.11, aiogram 3.x, SQLAlchemy 2 async ORM, asyncpg
+- Scheduling: APScheduler with a PostgreSQL SQLAlchemy job store
 - Validation: Zod (`zod/v4`), `drizzle-zod`
 - API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
@@ -39,6 +40,7 @@ Telegram bot that registers car wash customers and sends new service orders to t
 
 Customers register with their name and Telegram contact, select a car and payment method, share a service location, and create an order. The director receives order details and a Telegram location.
 The director can register workers and assign orders to available staff. Workers manage shifts, accept or reject assignments, report progress, and finish with before/after photos.
+Worker offers expire after three minutes even across bot restarts. Directors and assigned workers can cancel active orders with a required reason.
 
 ## User preferences
 
@@ -47,6 +49,7 @@ The director can register workers and assign orders to available staff. Workers 
 ## Gotchas
 
 - Hosted PostgreSQL URLs may use `sslmode`; `Settings.async_database_url` normalizes this for asyncpg.
+- APScheduler uses the synchronous psycopg URL while bot ORM queries use asyncpg.
 
 ## Pointers
 

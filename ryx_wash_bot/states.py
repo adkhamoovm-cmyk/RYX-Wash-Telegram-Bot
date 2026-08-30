@@ -24,3 +24,8 @@ class WorkerCompletionStates(StatesGroup):
     waiting_before_photo = State()
     waiting_after_photo = State()
     waiting_comment = State()
+
+
+class CancellationStates(StatesGroup):
+    waiting_reason = State()
+    waiting_custom_reason = State()

@@ -76,6 +76,11 @@ def new_order_assignment_keyboard(order_id: int):
         text="Ishchilarga yuborish",
         callback_data=f"assign_workers:{order_id}",
     )
+    builder.button(
+        text="Bekor qilish",
+        callback_data=f"cancel_order:{order_id}",
+    )
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -94,7 +99,8 @@ def worker_order_decision_keyboard(order_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="Qabul qilaman", callback_data=f"worker_accept:{order_id}")
     builder.button(text="Rad etaman", callback_data=f"worker_reject:{order_id}")
-    builder.adjust(2)
+    builder.button(text="Bekor qilish", callback_data=f"cancel_order:{order_id}")
+    builder.adjust(2, 1)
     return builder.as_markup()
 
 
@@ -109,5 +115,36 @@ def worker_status_keyboard(order_id: int, next_stage: str):
     builder.button(
         text=labels[next_stage],
         callback_data=f"worker_status:{next_stage}:{order_id}",
+    )
+    builder.button(
+        text="Bekor qilish",
+        callback_data=f"cancel_order:{order_id}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def cancellation_reasons_keyboard(order_id: int):
+    builder = InlineKeyboardBuilder()
+    reasons = (
+        ("Mijoz voz kechdi", "customer"),
+        ("Manzil noto'g'ri/topilmadi", "location"),
+        ("Ishchi yetib bora olmadi", "worker"),
+        ("Boshqa (yozib kiriting)", "other"),
+    )
+    for label, code in reasons:
+        builder.button(
+            text=label,
+            callback_data=f"cancel_reason:{order_id}:{code}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def cancel_only_keyboard(order_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Bekor qilish",
+        callback_data=f"cancel_order:{order_id}",
     )
     return builder.as_markup()

@@ -5,7 +5,9 @@ description = "Telegram bot for RYX Wash customer registration and wash orders"
 requires-python = ">=3.11"
 dependencies = [
     "aiogram>=3.4,<4",
+    "apscheduler>=3.10,<4",
     "asyncpg>=0.29,<1",
+    "psycopg[binary]>=3.1,<4",
     "pydantic-settings>=2.0,<3",
     "sqlalchemy>=2.0,<3",
 ]
