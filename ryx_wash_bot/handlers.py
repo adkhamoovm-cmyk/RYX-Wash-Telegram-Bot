@@ -49,6 +49,56 @@ UZBEK_PHONE_RE = re.compile(r"^\+998\d{9}$")
 TASHKENT = ZoneInfo("Asia/Tashkent")
 
 
+async def send_group_summary(
+    bot,
+    settings: Settings,
+    title: str,
+    customer: User,
+    orders: list[Order],
+    group_id: str,
+) -> None:
+    """Send a grouped order without exceeding Telegram's message limit."""
+    total = sum(int(order.car_price) for order in orders)
+    header = (
+        f"<b>{_safe(title)}</b>\n\n"
+        f"<b>Mijoz:</b> {_safe(customer.name)}\n"
+        f"<b>Telefon:</b> {_safe(customer.phone)}\n"
+        f"<b>Mashinalar:</b> {len(orders)} ta\n"
+        f"<b>Jami:</b> {_safe(format_price(total))}"
+    )
+    lines = [
+        f"{index}. {_safe(order.car_model)} | "
+        f"{_safe(order.plate_number)} | "
+        f"{_safe(format_price(int(order.car_price)))}"
+        for index, order in enumerate(orders, 1)
+    ]
+    full_text = header + "\n\n" + "\n".join(lines)
+    if len(full_text) <= 4000:
+        await bot.send_message(
+            settings.director_id,
+            full_text,
+            reply_markup=group_mode_keyboard(group_id, orders[0].id),
+        )
+        return
+
+    await bot.send_message(
+        settings.director_id,
+        header + "\n\nRo'yxat keyingi xabarlarda davom etadi.",
+        reply_markup=group_mode_keyboard(group_id, orders[0].id),
+    )
+    chunk: list[str] = []
+    chunk_length = 0
+    for line in lines:
+        if chunk and chunk_length + len(line) + 1 > 3800:
+            await bot.send_message(settings.director_id, "\n".join(chunk))
+            chunk = []
+            chunk_length = 0
+        chunk.append(line)
+        chunk_length += len(line) + 1
+    if chunk:
+        await bot.send_message(settings.director_id, "\n".join(chunk))
+
+
 def _new_router(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
@@ -60,53 +110,6 @@ def _new_router(
         return await session.scalar(
             select(User).where(User.telegram_id == telegram_id)
         )
-
-    async def send_group_summary(
-        bot,
-        title: str,
-        customer: User,
-        orders: list[Order],
-        group_id: str,
-    ) -> None:
-        total = sum(int(order.car_price) for order in orders)
-        header = (
-            f"<b>{_safe(title)}</b>\n\n"
-            f"<b>Mijoz:</b> {_safe(customer.name)}\n"
-            f"<b>Telefon:</b> {_safe(customer.phone)}\n"
-            f"<b>Mashinalar:</b> {len(orders)} ta\n"
-            f"<b>Jami:</b> {_safe(format_price(total))}"
-        )
-        lines = [
-            f"{index}. {_safe(order.car_model)} | "
-            f"{_safe(order.plate_number)} | "
-            f"{_safe(format_price(int(order.car_price)))}"
-            for index, order in enumerate(orders, 1)
-        ]
-        full_text = header + "\n\n" + "\n".join(lines)
-        if len(full_text) <= 4000:
-            await bot.send_message(
-                settings.director_id,
-                full_text,
-                reply_markup=group_mode_keyboard(group_id, orders[0].id),
-            )
-            return
-
-        await bot.send_message(
-            settings.director_id,
-            header + "\n\nRo'yxat keyingi xabarlarda davom etadi.",
-            reply_markup=group_mode_keyboard(group_id, orders[0].id),
-        )
-        chunk: list[str] = []
-        chunk_length = 0
-        for line in lines:
-            if chunk and chunk_length + len(line) + 1 > 3800:
-                await bot.send_message(settings.director_id, "\n".join(chunk))
-                chunk = []
-                chunk_length = 0
-            chunk.append(line)
-            chunk_length += len(line) + 1
-        if chunk:
-            await bot.send_message(settings.director_id, "\n".join(chunk))
 
     async def customer_or_reject(message: Message, session: AsyncSession) -> User | None:
         telegram_id = message.from_user.id if message.from_user else None
@@ -829,6 +832,7 @@ def _new_router(
             else:
                 await send_group_summary(
                     bot,
+                    settings,
                     "Qo'lda kiritilgan guruh buyurtmasi",
                     customer,
                     orders,
@@ -1217,6 +1221,7 @@ def _new_router(
                 else:
                     await send_group_summary(
                         bot,
+                        settings,
                         "Yangi guruh buyurtmasi",
                         user,
                         orders,
