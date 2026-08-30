@@ -1794,7 +1794,6 @@ def _register_user_routes(
             model = order.car_model
             plate = order.plate_number
             await session.commit()
-        await state.clear()
         await callback.bot.send_message(
             settings.director_id,
             f"<b>{_safe(worker_name)}</b> | {_safe(model)} | "
@@ -1805,20 +1804,24 @@ def _register_user_routes(
                 else "Yuvish tugadi, to‘lov turi tanlandi."
             ),
         )
-        await callback.message.edit_reply_markup(
-            reply_markup=worker_status_keyboard(order_id, "washing")
-        )
-        await callback.message.answer(
-            f"✅ To‘lov turi saqlandi: <b>{_safe(payment_method)}</b>\n"
-            + (
+        await callback.message.edit_reply_markup(reply_markup=None)
+        if order_status in {"yo‘lda", "yo'lda"}:
+            await state.clear()
+            await callback.message.answer(
+                "✅ To‘lov turi saqlandi. "
                 "Buyurtma manzilga yetib keldi deb belgilandi."
-                if order_status in {"yo‘lda", "yo'lda"}
-                else "Endi yakuniy rasmlarni yuboring."
             )
-        )
-        await callback.message.answer(
-            f"Mijoz telefoni: <b>{_safe(customer_phone)}</b>"
-        )
+            await callback.message.answer(
+                f"Mijoz telefoni: <b>{_safe(customer_phone)}</b>"
+            )
+        else:
+            await state.set_state(WorkerCompletionStates.waiting_before_photo)
+            await state.update_data(order_id=order_id)
+            await callback.message.answer(
+                f"✅ To‘lov turi saqlandi: <b>{_safe(payment_method)}</b>\n"
+                "Endi «Oldin» rasmini yuboring.",
+                reply_markup=ReplyKeyboardRemove(),
+            )
         await callback.answer()
 
     @router.message(WorkerCompletionStates.waiting_before_photo, F.photo)

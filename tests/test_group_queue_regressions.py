@@ -662,6 +662,25 @@ def test_worker_enters_missing_manual_order_plate_after_washing():
                 "yakuniy rasmlarni yuboring" in str(text)
                 for text, _ in payment_callback.message.answer_calls
             )
+            before = handler(router, "message", "receive_before_photo")
+            after = handler(router, "message", "receive_after_photo")
+            await before(
+                SimpleNamespace(
+                    photo=[SimpleNamespace(file_id="before-photo")],
+                    answer=RecordingMessage(bot, WORKER_ONE_ID).answer,
+                ),
+                state,
+            )
+            await after(
+                SimpleNamespace(
+                    photo=[SimpleNamespace(file_id="after-photo")],
+                    answer=RecordingMessage(bot, WORKER_ONE_ID).answer,
+                ),
+                state,
+            )
+            photo_data = await state.get_data()
+            assert photo_data["before_photo_id"] == "before-photo"
+            assert photo_data["after_photo_id"] == "after-photo"
         finally:
             await engine.dispose()
 
