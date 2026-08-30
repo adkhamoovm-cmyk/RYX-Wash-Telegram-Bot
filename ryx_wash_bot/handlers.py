@@ -48,6 +48,7 @@ from .keyboards import (
     report_period_keyboard,
     report_workers_keyboard,
     saved_cars_keyboard,
+    skip_car_photo_keyboard,
     skip_comment_keyboard,
     worker_menu_keyboard,
 )
@@ -1141,7 +1142,7 @@ def _new_router(
     async def append_manual_car(
         state: FSMContext,
         car: dict,
-        car_photo_id: str,
+        car_photo_id: str | None,
     ) -> None:
         data = await state.get_data()
         cars = list(data.get("cars", []))
@@ -1184,7 +1185,9 @@ def _new_router(
             f"✅ {_safe(car.model)} ({_safe(car.plate_number)}) tanlandi."
         )
         await callback.message.answer(
-            "📷 Shu mashinaning referens rasmini yuboring (majburiy):"
+            "📷 Shu mashinaning referens rasmini yuboring yoki "
+            "rasmni o'tkazib yuboring:",
+            reply_markup=skip_car_photo_keyboard(),
         )
 
     @router.callback_query(
@@ -1316,9 +1319,8 @@ def _new_router(
         )
         await state.set_state(ManualOrderStates.waiting_car_photo)
         await message.answer(
-            "📷 Mashina rasmini yuboring. Rasm majburiy, keyingi bosqichga "
-            "rasmsiz o'tib bo'lmaydi.",
-            reply_markup=ReplyKeyboardRemove(),
+            "📷 Mashina rasmini yuboring yoki rasmni o'tkazib yuboring:",
+            reply_markup=skip_car_photo_keyboard(),
         )
 
     @router.message(ManualOrderStates.waiting_car_photo, F.photo)
@@ -1335,10 +1337,30 @@ def _new_router(
             reply_markup=next_car_keyboard("manual"),
         )
 
+    @router.message(
+        ManualOrderStates.waiting_car_photo,
+        F.text.in_({"⏭️ Rasmni o'tkazib yuborish", "Rasmni o'tkazib yuborish"}),
+    )
+    async def manual_skip_car_photo(message: Message, state: FSMContext) -> None:
+        data = await state.get_data()
+        current_car = data.get("current_car")
+        if not current_car:
+            await message.answer("❌ Mashina ma'lumotlari topilmadi. /cancel bosing.")
+            return
+        await append_manual_car(state, current_car, None)
+        await state.set_state(ManualOrderStates.waiting_next_car)
+        await message.answer(
+            "✅ Rasm o'tkazib yuborildi, mashina buyurtmaga qo'shildi. "
+            "Yana mashina qo'shasizmi?",
+            reply_markup=next_car_keyboard("manual"),
+        )
+
     @router.message(ManualOrderStates.waiting_car_photo)
     async def manual_require_car_photo(message: Message) -> None:
         await message.answer(
-            "❌ Mashina rasmi majburiy. Iltimos, Telegram orqali bitta rasm yuboring."
+            "❌ Iltimos, Telegram orqali bitta rasm yuboring yoki "
+            "«⏭️ Rasmni o'tkazib yuborish» tugmasini bosing.",
+            reply_markup=skip_car_photo_keyboard(),
         )
 
     @router.callback_query(
@@ -1484,7 +1506,7 @@ def _new_router(
                         else None
                     ),
                     address=data.get("address"),
-                    car_photo_id=car["car_photo_id"],
+                    car_photo_id=car.get("car_photo_id"),
                     comment=comment,
                     order_group_id=group_id,
                     status="yangi",
@@ -1516,11 +1538,12 @@ def _new_router(
                     director_text,
                     reply_markup=new_order_assignment_keyboard(order.id),
                 )
-                await bot.send_photo(
-                    settings.director_id,
-                    order.car_photo_id,
-                    caption=f"📷 Buyurtma #{order.id} mashina rasmi",
-                )
+                if order.car_photo_id:
+                    await bot.send_photo(
+                        settings.director_id,
+                        order.car_photo_id,
+                        caption=f"📷 Buyurtma #{order.id} mashina rasmi",
+                    )
             else:
                 await send_group_summary(
                     bot,
