@@ -1,15 +1,16 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy import text
 
-from .models import Base
+from .catalog import CAR_MODELS, CarModel, load_models
+from .models import Base, ServiceModel
 
 
 def make_engine(database_url: str) -> AsyncEngine:
@@ -24,7 +25,7 @@ async def create_tables(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
         # create_all does not alter tables that were created by an earlier
-        # version of the bot, so add the assignment/completion columns safely.
+        # version of the bot, so add the assignment and catalog columns safely.
         await connection.execute(
             text(
                 """
@@ -39,13 +40,11 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS before_photo_id VARCHAR(255),
                     ADD COLUMN IF NOT EXISTS after_photo_id VARCHAR(255),
-                    ADD COLUMN IF NOT EXISTS worker_comment TEXT
-                    ,
+                    ADD COLUMN IF NOT EXISTS worker_comment TEXT,
                     ADD COLUMN IF NOT EXISTS queued_offer BOOLEAN NOT NULL DEFAULT FALSE,
                     ADD COLUMN IF NOT EXISTS queue_prompted_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS address TEXT,
-                    ADD COLUMN IF NOT EXISTS car_photo_id VARCHAR(255)
-                    ,
+                    ADD COLUMN IF NOT EXISTS car_photo_id VARCHAR(255),
                     ADD COLUMN IF NOT EXISTS car_color VARCHAR(50),
                     ADD COLUMN IF NOT EXISTS order_group_id VARCHAR(36),
                     ADD COLUMN IF NOT EXISTS group_mode VARCHAR(20)
@@ -170,11 +169,55 @@ async def create_tables(engine: AsyncEngine) -> None:
                           AND table_name = 'cancellations'
                           AND column_name = 'vaqt'
                     ) THEN
-                        ALTER TABLE cancellations RENAME COLUMN cancelled_at TO vaqt;
+                        ALTER TABLE cancellations
+                            RENAME COLUMN cancelled_at TO vaqt;
                     END IF;
                 END $$;
                 """
             )
+        )
+
+
+async def initialize_catalog(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    """Seed the initial catalog once and load active models into the bot cache."""
+    async with sessions() as session:
+        existing_model_id = await session.scalar(select(ServiceModel.id).limit(1))
+        if existing_model_id is None:
+            session.add_all(
+                [
+                    ServiceModel(
+                        id=model.id,
+                        category=model.category,
+                        name=model.name,
+                        price=model.price,
+                    )
+                    for model in CAR_MODELS
+                ]
+            )
+            await session.commit()
+        models = list(
+            (
+                await session.scalars(
+                    select(ServiceModel)
+                    .where(ServiceModel.active.is_(True))
+                    .order_by(
+                        ServiceModel.category,
+                        ServiceModel.created_at,
+                        ServiceModel.id,
+                    )
+                )
+            ).all()
+        )
+        load_models(
+            CarModel(
+                id=model.id,
+                category=model.category,
+                name=model.name,
+                price=int(model.price),
+            )
+            for model in models
         )
 
 

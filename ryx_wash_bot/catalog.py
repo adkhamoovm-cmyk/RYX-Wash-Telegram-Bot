@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from collections.abc import Iterable
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +23,34 @@ CAR_MODELS: tuple[CarModel, ...] = (
     CarModel("suv-equinox", "SUV", "Chevrolet Equinox", 80_000),
     CarModel("minivan-damas", "Minivan", "Chevrolet Damas", 50_000),
 )
+
+
+def load_models(models: Iterable[CarModel]) -> None:
+    global CAR_MODELS
+    CAR_MODELS = tuple(models)
+
+
+def add_model(model: CarModel) -> None:
+    load_models((*CAR_MODELS, model))
+
+
+def replace_model(model_id: str, *, price: int) -> CarModel | None:
+    for index, model in enumerate(CAR_MODELS):
+        if model.id != model_id:
+            continue
+        updated = CarModel(model.id, model.category, model.name, price)
+        models = list(CAR_MODELS)
+        models[index] = updated
+        load_models(models)
+        return updated
+    return None
+
+
+def remove_model(model_id: str) -> CarModel | None:
+    removed = get_model(model_id)
+    if removed is not None:
+        load_models(model for model in CAR_MODELS if model.id != model_id)
+    return removed
 
 
 def categories() -> list[str]:

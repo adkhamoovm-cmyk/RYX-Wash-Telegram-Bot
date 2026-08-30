@@ -22,7 +22,30 @@ created with `rol="direktor"` if it does not already exist. All other new
 Telegram users are registered as `rol="mijoz"` and must complete registration
 before creating an order.
 
-The initial vehicle catalog and prices are in `ryx_wash_bot/catalog.py`.
+The initial vehicle catalog is seeded from `ryx_wash_bot/catalog.py` into the
+`service_models` table. After that, the director manages active models and
+prices from Telegram; existing orders keep their original price snapshot.
+
+## Price management
+
+- **Narxlarni boshqarish** shows the active category/model price list.
+- The director can add a model with category, name, and price.
+- Existing prices can be changed without altering old orders.
+- Deleting a model removes it from new customer/manual order choices while
+  preserving past order data.
+
+## Expenses and financial reports
+
+- **Xarajat qo'shish** stores an amount, description, director ID, and Tashkent
+  timestamp in the `expenses` table.
+- **Hisobot** supports today, current week, current month, 3 months, 6 months,
+  and an inclusive manually entered date range.
+- Reports can include all workers or one worker. They show total income,
+  expenses, net profit, cash/card income, completed car count, cancelled order
+  count and reasons, plus the selected worker's percentage share.
+- Expenses are business-wide; this is stated in single-worker reports.
+- APScheduler sends the current day's report to the director every day at
+  21:00 in `Asia/Tashkent`. The cron job uses the existing PostgreSQL job store.
 
 ## Worker flow
 

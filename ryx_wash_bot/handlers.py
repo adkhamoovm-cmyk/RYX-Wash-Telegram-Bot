@@ -1,7 +1,8 @@
 import html
 import logging
 import re
-from decimal import Decimal
+from datetime import datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -14,7 +15,16 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from .catalog import categories, format_price, get_model, get_model_by_name
+from .catalog import (
+    CarModel,
+    add_model,
+    categories,
+    format_price,
+    get_model,
+    get_model_by_name,
+    remove_model,
+    replace_model,
+)
 from .config import Settings
 from .keyboards import (
     category_keyboard,
@@ -30,12 +40,24 @@ from .keyboards import (
     new_order_assignment_keyboard,
     payment_keyboard,
     next_car_keyboard,
+    price_management_keyboard,
+    price_models_keyboard,
+    report_period_keyboard,
+    report_workers_keyboard,
     saved_cars_keyboard,
     skip_comment_keyboard,
     worker_menu_keyboard,
 )
-from .models import CustomerCar, Order, User, Worker
-from .states import ManualOrderStates, OrderStates, RegistrationStates
+from .models import CustomerCar, Expense, Order, ServiceModel, User, Worker
+from .reports import build_financial_report, period_bounds
+from .states import (
+    ExpenseStates,
+    ManualOrderStates,
+    OrderStates,
+    PriceManagementStates,
+    RegistrationStates,
+    ReportStates,
+)
 from .worker_handlers import register_worker_routes
 
 logger = logging.getLogger(__name__)
@@ -47,6 +69,22 @@ def _safe(value: object) -> str:
 
 UZBEK_PHONE_RE = re.compile(r"^\+998\d{9}$")
 TASHKENT = ZoneInfo("Asia/Tashkent")
+CUSTOM_RANGE_RE = re.compile(
+    r"^\s*(\d{2}\.\d{2}\.\d{4})\s*[-–—]\s*(\d{2}\.\d{2}\.\d{4})\s*$"
+)
+
+
+def _parse_money(value: str, *, whole_only: bool = False) -> Decimal | None:
+    normalized = value.strip().replace(" ", "").replace(",", ".")
+    try:
+        amount = Decimal(normalized)
+    except InvalidOperation:
+        return None
+    if amount <= 0 or amount > Decimal("9999999999.99"):
+        return None
+    if whole_only and amount != amount.to_integral_value():
+        return None
+    return amount.quantize(Decimal("0.01"))
 
 
 async def send_group_summary(
@@ -306,62 +344,426 @@ def _new_router(
             history_text = history_text[:3950] + "\n\n… faqat so'nggi buyurtmalar ko'rsatildi."
         await message.answer(history_text)
 
-    @router.message(F.text == "Statistika")
-    async def director_statistics(message: Message) -> None:
+    async def director_allowed(user_id: int) -> bool:
         async with session_factory() as session:
-            director = await find_user(session, message.from_user.id)
-            if not director or director.rol != "direktor":
-                await message.answer("Bu bo'lim faqat direktor uchun.")
-                return
-            rows = (
-                await session.execute(
-                    select(Order, Worker)
-                    .outerjoin(Worker, Order.worker_id == Worker.user_id)
-                    .where(Order.status == "yakunlandi")
-                    .order_by(Order.completed_at)
+            user = await find_user(session, user_id)
+            return bool(user and user.rol == "direktor")
+
+    async def active_service_models(session: AsyncSession) -> list[ServiceModel]:
+        return list(
+            (
+                await session.scalars(
+                    select(ServiceModel)
+                    .where(ServiceModel.active.is_(True))
+                    .order_by(
+                        ServiceModel.category,
+                        ServiceModel.created_at,
+                        ServiceModel.id,
+                    )
                 )
             ).all()
-        if not rows:
-            await message.answer("Hali yakunlangan buyurtmalar yo'q.")
+        )
+
+    @router.message(F.text == "Narxlarni boshqarish")
+    async def price_management(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await message.answer("Bu bo'lim faqat direktor uchun.")
             return
-        total_revenue = sum(Decimal(order.car_price) for order, _worker in rows)
-        worker_stats: dict[int, dict[str, object]] = {}
-        for order, worker in rows:
-            if not worker:
-                continue
-            stats = worker_stats.setdefault(
-                worker.user_id,
-                {
-                    "name": worker.name,
-                    "cars": 0,
-                    "share": Decimal("0"),
-                },
+        await state.clear()
+        await message.answer(
+            "Narxlar boshqaruvi:",
+            reply_markup=price_management_keyboard(),
+        )
+
+    @router.callback_query(F.data == "price_list")
+    async def list_prices(callback: CallbackQuery) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        async with session_factory() as session:
+            models = await active_service_models(session)
+        await callback.answer()
+        if not models:
+            await callback.message.answer("Faol model va narxlar yo'q.")
+            return
+        chunks: list[str] = []
+        current = "<b>Amaldagi narxlar</b>"
+        current_category = None
+        for model in models:
+            lines: list[str] = []
+            if model.category != current_category:
+                current_category = model.category
+                lines.append(f"\n<b>{_safe(model.category)}</b>")
+            lines.append(
+                f"• {_safe(model.name)} — "
+                f"{_safe(format_price(int(model.price)))}"
             )
-            stats["cars"] = int(stats["cars"]) + 1
-            stats["share"] = Decimal(stats["share"]) + (
-                Decimal(order.car_price) * Decimal(worker.share_percent) / Decimal("100")
-            )
-        lines = [
-            "<b>Umumiy statistika</b>",
-            f"Yuvilgan mashinalar: <b>{len(rows)}</b>",
-            f"Daromad: <b>{_safe(format_price(int(total_revenue)))}</b>",
-            "",
-            "<b>Ishchilar:</b>",
-        ]
-        worker_lines = []
-        for stats in worker_stats.values():
-            worker_lines.append(
-                f"• {_safe(stats['name'])}: {stats['cars']} ta mashina, "
-                f"ulushi {_safe(format_price(int(Decimal(stats['share']))))}"
-            )
-        current = "\n".join(lines)
-        for line in worker_lines:
-            if len(current) + len(line) + 1 > 3800:
-                await message.answer(current)
-                current = "<b>Ishchilar (davomi):</b>\n" + line
+            addition = "\n".join(lines)
+            if len(current) + len(addition) + 1 > 3800:
+                chunks.append(current)
+                current = "<b>Narxlar davomi</b>\n" + addition
             else:
-                current += "\n" + line
-        await message.answer(current)
+                current += "\n" + addition
+        chunks.append(current)
+        for chunk in chunks:
+            await callback.message.answer(chunk)
+
+    @router.callback_query(F.data == "price_add")
+    async def start_add_price_model(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        await state.set_state(PriceManagementStates.waiting_new_category)
+        await callback.answer()
+        existing = ", ".join(categories()) or "hali kategoriya yo'q"
+        await callback.message.answer(
+            "Yangi model kategoriyasini kiriting.\n"
+            f"Mavjud kategoriyalar: {_safe(existing)}"
+        )
+
+    @router.message(PriceManagementStates.waiting_new_category, F.text)
+    async def receive_new_model_category(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("Bu amal faqat direktor uchun.")
+            return
+        category = " ".join(message.text.split())
+        if not category or len(category) > 50:
+            await message.answer("Kategoriya 1–50 belgi bo'lishi kerak.")
+            return
+        await state.update_data(price_category=category)
+        await state.set_state(PriceManagementStates.waiting_new_name)
+        await message.answer("Yangi model nomini kiriting:")
+
+    @router.message(PriceManagementStates.waiting_new_name, F.text)
+    async def receive_new_model_name(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("Bu amal faqat direktor uchun.")
+            return
+        name = " ".join(message.text.split())
+        if not name or len(name) > 100:
+            await message.answer("Model nomi 1–100 belgi bo'lishi kerak.")
+            return
+        await state.update_data(price_model_name=name)
+        await state.set_state(PriceManagementStates.waiting_new_price)
+        await message.answer("Model narxini so'mda kiriting, masalan 70000:")
+
+    @router.message(PriceManagementStates.waiting_new_price, F.text)
+    async def receive_new_model_price(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("Bu amal faqat direktor uchun.")
+            return
+        price = _parse_money(message.text, whole_only=True)
+        if price is None:
+            await message.answer("Musbat, butun narx kiriting, masalan 70000.")
+            return
+        data = await state.get_data()
+        category = data["price_category"]
+        name = data["price_model_name"]
+        async with session_factory() as session:
+            duplicate = await session.scalar(
+                select(ServiceModel).where(
+                    ServiceModel.active.is_(True),
+                    func.lower(ServiceModel.category) == category.lower(),
+                    func.lower(ServiceModel.name) == name.lower(),
+                )
+            )
+            if duplicate:
+                await message.answer("Bu kategoriya va model allaqachon mavjud.")
+                return
+            model_id = f"custom-{uuid4().hex}"
+            service_model = ServiceModel(
+                id=model_id,
+                category=category,
+                name=name,
+                price=price,
+            )
+            session.add(service_model)
+            await session.commit()
+        add_model(CarModel(model_id, category, name, int(price)))
+        await state.clear()
+        await message.answer(
+            f"{_safe(category)} / {_safe(name)} qo'shildi: "
+            f"{_safe(format_price(int(price)))}",
+            reply_markup=director_menu_keyboard(),
+        )
+
+    @router.callback_query(F.data == "price_edit")
+    async def choose_price_model_to_edit(callback: CallbackQuery) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        async with session_factory() as session:
+            models = await active_service_models(session)
+        await callback.answer()
+        if not models:
+            await callback.message.answer("O'zgartirish uchun model yo'q.")
+            return
+        await callback.message.answer(
+            "Narxi o'zgartiriladigan modelni tanlang:",
+            reply_markup=price_models_keyboard(models, "edit"),
+        )
+
+    @router.callback_query(F.data.startswith("price_edit_model:"))
+    async def start_price_update(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        model_id = callback.data.split(":", 1)[1]
+        async with session_factory() as session:
+            model = await session.get(ServiceModel, model_id)
+            if not model or not model.active:
+                await callback.answer("Model topilmadi.", show_alert=True)
+                return
+        await state.update_data(price_model_id=model_id)
+        await state.set_state(PriceManagementStates.waiting_updated_price)
+        await callback.answer()
+        await callback.message.answer(
+            f"{_safe(model.category)} / {_safe(model.name)}\n"
+            f"Joriy narx: {_safe(format_price(int(model.price)))}\n"
+            "Yangi narxni kiriting:"
+        )
+
+    @router.message(PriceManagementStates.waiting_updated_price, F.text)
+    async def update_model_price(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("Bu amal faqat direktor uchun.")
+            return
+        price = _parse_money(message.text, whole_only=True)
+        if price is None:
+            await message.answer("Musbat, butun narx kiriting.")
+            return
+        data = await state.get_data()
+        async with session_factory() as session:
+            model = await session.get(ServiceModel, data["price_model_id"])
+            if not model or not model.active:
+                await state.clear()
+                await message.answer("Model topilmadi.")
+                return
+            model.price = price
+            await session.commit()
+            model_name = model.name
+        replace_model(data["price_model_id"], price=int(price))
+        await state.clear()
+        await message.answer(
+            f"{_safe(model_name)} narxi "
+            f"{_safe(format_price(int(price)))} ga o'zgartirildi.",
+            reply_markup=director_menu_keyboard(),
+        )
+
+    @router.callback_query(F.data == "price_delete")
+    async def choose_price_model_to_delete(callback: CallbackQuery) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        async with session_factory() as session:
+            models = await active_service_models(session)
+        await callback.answer()
+        if not models:
+            await callback.message.answer("O'chirish uchun model yo'q.")
+            return
+        await callback.message.answer(
+            "O'chiriladigan modelni tanlang:",
+            reply_markup=price_models_keyboard(models, "delete"),
+        )
+
+    @router.callback_query(F.data.startswith("price_delete_model:"))
+    async def delete_price_model(callback: CallbackQuery) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        model_id = callback.data.split(":", 1)[1]
+        async with session_factory() as session:
+            model = await session.get(ServiceModel, model_id)
+            if not model or not model.active:
+                await callback.answer("Model topilmadi.", show_alert=True)
+                return
+            model.active = False
+            model_name = model.name
+            await session.commit()
+        remove_model(model_id)
+        await callback.answer("Model o'chirildi.")
+        await callback.message.answer(
+            f"{_safe(model_name)} faol narxlar ro'yxatidan o'chirildi.",
+            reply_markup=director_menu_keyboard(),
+        )
+
+    @router.message(F.text == "Xarajat qo'shish")
+    async def start_expense(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await message.answer("Bu bo'lim faqat direktor uchun.")
+            return
+        await state.clear()
+        await state.set_state(ExpenseStates.waiting_amount)
+        await message.answer(
+            "Xarajat summasini so'mda kiriting:",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+
+    @router.message(ExpenseStates.waiting_amount, F.text)
+    async def receive_expense_amount(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("Bu amal faqat direktor uchun.")
+            return
+        amount = _parse_money(message.text, whole_only=True)
+        if amount is None:
+            await message.answer("Musbat summa kiriting, masalan 150000.")
+            return
+        await state.update_data(expense_amount=str(amount))
+        await state.set_state(ExpenseStates.waiting_description)
+        await message.answer("Xarajat tavsifini kiriting:")
+
+    @router.message(ExpenseStates.waiting_description, F.text)
+    async def receive_expense_description(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("Bu amal faqat direktor uchun.")
+            return
+        description = " ".join(message.text.split())
+        if not description or len(description) > 500:
+            await message.answer("Tavsif 1–500 belgi bo'lishi kerak.")
+            return
+        data = await state.get_data()
+        amount = Decimal(data["expense_amount"])
+        async with session_factory() as session:
+            session.add(
+                Expense(
+                    amount=amount,
+                    description=description,
+                    spent_at=datetime.now(TASHKENT),
+                    created_by=message.from_user.id,
+                )
+            )
+            await session.commit()
+        await state.clear()
+        await message.answer(
+            f"Xarajat saqlandi: {_safe(format_price(int(amount)))}\n"
+            f"Tavsif: {_safe(description)}",
+            reply_markup=director_menu_keyboard(),
+        )
+
+    async def ask_report_worker(message: Message, state: FSMContext) -> None:
+        async with session_factory() as session:
+            workers = list(
+                (
+                    await session.scalars(select(Worker).order_by(Worker.name))
+                ).all()
+            )
+        await state.set_state(ReportStates.waiting_worker)
+        await message.answer(
+            "Hisobot uchun ishchi filtrini tanlang:",
+            reply_markup=report_workers_keyboard(workers),
+        )
+
+    @router.message(F.text.in_({"Hisobot", "Statistika"}))
+    async def start_report(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await message.answer("Bu bo'lim faqat direktor uchun.")
+            return
+        await state.clear()
+        await message.answer(
+            "Hisobot davrini tanlang:",
+            reply_markup=report_period_keyboard(),
+        )
+
+    @router.callback_query(F.data.startswith("report_period:"))
+    async def choose_report_period(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        period = callback.data.split(":", 1)[1]
+        await callback.answer()
+        if period == "custom":
+            await state.set_state(ReportStates.waiting_custom_range)
+            await callback.message.answer(
+                "Sana oralig'ini quyidagi formatda kiriting:\n"
+                "<code>01.08.2026 - 30.08.2026</code>"
+            )
+            return
+        try:
+            start, end = period_bounds(period)
+        except ValueError:
+            await callback.message.answer("Hisobot davri topilmadi.")
+            return
+        await state.update_data(report_start=start.isoformat(), report_end=end.isoformat())
+        await ask_report_worker(callback.message, state)
+
+    @router.message(ReportStates.waiting_custom_range, F.text)
+    async def receive_custom_report_range(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("Bu amal faqat direktor uchun.")
+            return
+        match = CUSTOM_RANGE_RE.fullmatch(message.text)
+        if not match:
+            await message.answer(
+                "Format noto'g'ri. Masalan: 01.08.2026 - 30.08.2026"
+            )
+            return
+        try:
+            start = datetime.strptime(match.group(1), "%d.%m.%Y").replace(
+                tzinfo=TASHKENT
+            )
+            last_day = datetime.strptime(match.group(2), "%d.%m.%Y").replace(
+                tzinfo=TASHKENT
+            )
+        except ValueError:
+            await message.answer("Sanalardan biri noto'g'ri.")
+            return
+        if last_day < start:
+            await message.answer("Tugash sanasi boshlanish sanasidan oldin bo'lmasin.")
+            return
+        end = last_day + timedelta(days=1)
+        await state.update_data(report_start=start.isoformat(), report_end=end.isoformat())
+        await ask_report_worker(message, state)
+
+    @router.callback_query(
+        ReportStates.waiting_worker,
+        F.data.startswith("report_worker:"),
+    )
+    async def generate_report(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        worker_value = callback.data.split(":", 1)[1]
+        worker_id = None if worker_value == "all" else int(worker_value)
+        data = await state.get_data()
+        start = datetime.fromisoformat(data["report_start"])
+        end = datetime.fromisoformat(data["report_end"])
+        async with session_factory() as session:
+            if worker_id is not None and await session.get(Worker, worker_id) is None:
+                await callback.answer("Ishchi topilmadi.", show_alert=True)
+                return
+            chunks = await build_financial_report(
+                session,
+                start,
+                end,
+                worker_id=worker_id,
+            )
+        await callback.answer()
+        await state.clear()
+        for chunk in chunks:
+            await callback.message.answer(chunk)
+        await callback.message.answer(
+            "Hisobot tayyor.",
+            reply_markup=director_menu_keyboard(),
+        )
 
     @router.message(F.text == "Qo'lda buyurtma qo'shish")
     async def start_manual_order(message: Message, state: FSMContext) -> None:

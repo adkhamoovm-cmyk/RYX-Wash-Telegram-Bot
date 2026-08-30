@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from aiogram import Bot
 from apscheduler.jobstores.base import JobLookupError
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -15,6 +16,7 @@ from .models import Order, Worker
 logger = logging.getLogger(__name__)
 TASHKENT = ZoneInfo("Asia/Tashkent")
 OFFER_TIMEOUT_MINUTES = 3
+DAILY_REPORT_JOB_ID = "daily-financial-report"
 
 _sessions: async_sessionmaker[AsyncSession] | None = None
 _bot: Bot | None = None
@@ -65,6 +67,28 @@ def remove_offer_timeout(scheduler: AsyncIOScheduler, order_id: int) -> None:
         scheduler.remove_job(offer_timeout_job_id(order_id))
     except JobLookupError:
         pass
+
+
+def schedule_daily_report(scheduler: AsyncIOScheduler) -> None:
+    scheduler.add_job(
+        send_daily_financial_report,
+        trigger=CronTrigger(hour=21, minute=0, timezone=TASHKENT),
+        id=DAILY_REPORT_JOB_ID,
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+
+
+async def send_daily_financial_report() -> None:
+    if _sessions is None or _bot is None or _settings is None:
+        logger.error("Daily report runtime is not configured")
+        return
+    try:
+        from .reports import send_daily_report
+
+        await send_daily_report(_sessions, _bot, _settings)
+    except Exception:
+        logger.exception("Could not send the daily financial report")
 
 
 async def expire_worker_offer(order_id: int) -> None:

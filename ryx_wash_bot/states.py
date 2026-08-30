@@ -6,6 +6,23 @@ class RegistrationStates(StatesGroup):
     waiting_phone = State()
 
 
+class PriceManagementStates(StatesGroup):
+    waiting_new_category = State()
+    waiting_new_name = State()
+    waiting_new_price = State()
+    waiting_updated_price = State()
+
+
+class ExpenseStates(StatesGroup):
+    waiting_amount = State()
+    waiting_description = State()
+
+
+class ReportStates(StatesGroup):
+    waiting_custom_range = State()
+    waiting_worker = State()
+
+
 class OrderStates(StatesGroup):
     waiting_car_choice = State()
     waiting_car_category = State()

@@ -26,8 +26,9 @@ Telegram bot that registers car wash customers and sends new service orders to t
 ## Where things live
 
 - `ryx_wash_bot/handlers.py` — registration and order FSM flows
-- `ryx_wash_bot/models.py` — SQLAlchemy `users` and `orders` models
-- `ryx_wash_bot/catalog.py` — editable car categories, models, and prices
+- `ryx_wash_bot/models.py` — SQLAlchemy bot, catalog, and expense models
+- `ryx_wash_bot/catalog.py` — initial catalog plus the runtime catalog cache
+- `ryx_wash_bot/reports.py` — financial report calculations and daily delivery
 - `RYX_WASH_README.md` — bot setup and operation
 
 ## Architecture decisions
@@ -35,6 +36,8 @@ Telegram bot that registers car wash customers and sends new service orders to t
 - New Telegram users are customers by default; the configured director is seeded as `direktor`.
 - Customer phone and service location are accepted only through Telegram request buttons.
 - Orders snapshot the selected car model and price so later catalog edits do not alter old orders.
+- Active catalog models and prices persist in PostgreSQL; the director manages them from Telegram.
+- Financial reports count completed orders by `completed_at`, expenses by `spent_at`, and cancellations by `cancelled_at` in `Asia/Tashkent`.
 
 ## Product
 
@@ -44,6 +47,7 @@ Worker offers expire after three minutes even across bot restarts. Directors and
 When everyone is busy, orders can enter a global FIFO queue or a worker-specific queue. A worker never receives a second active order; queued details open only after the current order ends.
 The director can create phone-call orders manually. These require a plate and reference car photo, accept either Telegram coordinates or a written address, and reuse customers by normalized phone number.
 Customers can save multiple vehicles and create grouped requests. Each car is a separate order row linked by `order_group_id`; a whole group can be queued for one worker or split across workers.
+The director can add expenses, run date/worker-filtered financial reports, and manage catalog prices. A persistent APScheduler cron sends the daily report at 21:00 Tashkent time.
 
 ## Gotchas
 

@@ -9,10 +9,10 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select
 
 from .config import Settings
-from .db import create_tables, make_engine, session_factory
+from .db import create_tables, initialize_catalog, make_engine, session_factory
 from .handlers import _new_router
 from .models import User
-from .scheduler import configure_timeout_runtime
+from .scheduler import configure_timeout_runtime, schedule_daily_report
 
 
 async def run() -> None:
@@ -20,6 +20,7 @@ async def run() -> None:
     engine = make_engine(settings.async_database_url)
     await create_tables(engine)
     sessions = session_factory(engine)
+    await initialize_catalog(sessions)
 
     # Keep the director's role in the database, while DIRECTOR_ID remains the
     # notification destination and environment-level configuration.
@@ -50,6 +51,7 @@ async def run() -> None:
         timezone="Asia/Tashkent",
     )
     configure_timeout_runtime(sessions, bot, settings)
+    schedule_daily_report(scheduler)
     dispatcher = Dispatcher()
     dispatcher.include_router(_new_router(sessions, settings, scheduler))
 

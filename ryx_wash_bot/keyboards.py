@@ -21,8 +21,59 @@ def director_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.add(KeyboardButton(text="Ishchi qo'shish"))
     builder.add(KeyboardButton(text="Qo'lda buyurtma qo'shish"))
-    builder.add(KeyboardButton(text="Statistika"))
+    builder.add(KeyboardButton(text="Narxlarni boshqarish"))
+    builder.add(KeyboardButton(text="Xarajat qo'shish"))
+    builder.add(KeyboardButton(text="Hisobot"))
+    builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
+
+
+def price_management_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Narxlar ro'yxati", callback_data="price_list")
+    builder.button(text="Yangi model qo'shish", callback_data="price_add")
+    builder.button(text="Narxni o'zgartirish", callback_data="price_edit")
+    builder.button(text="Modelni o'chirish", callback_data="price_delete")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def price_models_keyboard(models: list, action: str):
+    builder = InlineKeyboardBuilder()
+    for model in models:
+        label = f"{model.category} | {model.name} — {format_price(int(model.price))}"
+        if len(label) > 60:
+            label = label[:57] + "..."
+        builder.button(
+            text=label,
+            callback_data=f"price_{action}_model:{model.id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def report_period_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Bugun", callback_data="report_period:today")
+    builder.button(text="Shu hafta", callback_data="report_period:week")
+    builder.button(text="Shu oy", callback_data="report_period:month")
+    builder.button(text="3 oy", callback_data="report_period:3months")
+    builder.button(text="6 oy", callback_data="report_period:6months")
+    builder.button(text="Sana oralig'i", callback_data="report_period:custom")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def report_workers_keyboard(workers: list):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Barcha ishchilar", callback_data="report_worker:all")
+    for worker in workers:
+        builder.button(
+            text=worker.name[:60],
+            callback_data=f"report_worker:{worker.user_id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 def worker_menu_keyboard() -> ReplyKeyboardMarkup:
