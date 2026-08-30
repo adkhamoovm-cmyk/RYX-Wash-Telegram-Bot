@@ -42,7 +42,7 @@ timeoutMs = 20000
 [userenv]
 
 [userenv.shared]
-DIRECTOR_ID = "846411059"
+DIRECTOR_ID = "7665084728"
 
 [nix]
 channel = "stable-25_05"
