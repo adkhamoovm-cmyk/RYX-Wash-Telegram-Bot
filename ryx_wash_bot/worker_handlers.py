@@ -1,6 +1,6 @@
 import html
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
@@ -24,11 +24,13 @@ from .keyboards import (
     new_order_assignment_keyboard,
     no_available_workers_keyboard,
     queue_offer_decision_keyboard,
+    worker_cabinet_period_keyboard,
     worker_menu_keyboard,
     worker_order_decision_keyboard,
     worker_status_keyboard,
 )
 from .models import Cancellation, Order, User, Worker
+from .reports import period_bounds
 from .scheduler import (
     configure_worker_available_handler,
     remove_offer_timeout,
@@ -85,6 +87,133 @@ def _register_user_routes(
 
     async def get_worker(session: AsyncSession, user_id: int) -> Worker | None:
         return await session.scalar(select(Worker).where(Worker.user_id == user_id))
+
+    async def render_worker_cabinet(
+        worker_id: int,
+        period_code: str = "today",
+    ) -> str | None:
+        try:
+            start, end = period_bounds(period_code)
+        except ValueError:
+            return None
+        period_labels = {
+            "today": "Bugun",
+            "week": "Shu hafta",
+            "month": "Shu oy",
+        }
+        async with sessions() as session:
+            worker = await get_worker(session, worker_id)
+            if worker is None:
+                return None
+            order_filter = (
+                Order.worker_id == worker_id,
+                Order.status == "yakunlandi",
+                Order.completed_at >= start,
+                Order.completed_at < end,
+            )
+            washed_count = await session.scalar(
+                select(func.count(Order.id)).where(*order_filter)
+            )
+            total_revenue = await session.scalar(
+                select(func.coalesce(func.sum(Order.car_price), 0)).where(
+                    *order_filter
+                )
+            )
+            earnings = Decimal(str(total_revenue or 0)) * Decimal(
+                worker.share_percent
+            ) / Decimal("100")
+            recent_orders = list(
+                (
+                    await session.scalars(
+                        select(Order)
+                        .where(Order.worker_id == worker_id)
+                        .order_by(Order.created_at.desc(), Order.id.desc())
+                        .limit(10)
+                    )
+                ).all()
+            )
+
+            now = now_tashkent()
+            today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            tomorrow = today_start + timedelta(days=1)
+            shift_start = worker.shift_started_at
+            shift_end = worker.shift_ended_at
+            is_at_work = worker.status in {"bo'sh", "band"} or (
+                shift_start is not None and shift_end is None
+            )
+            if is_at_work:
+                work_start = (
+                    max(shift_start, today_start)
+                    if shift_start is not None
+                    else today_start
+                )
+                work_end = now
+            elif shift_end is not None and shift_end >= today_start:
+                work_start = max(
+                    shift_start or today_start,
+                    today_start,
+                )
+                work_end = min(shift_end, tomorrow)
+            else:
+                work_start = work_end = today_start
+            worked_today = _duration_text(work_start, work_end)
+
+        lines = [
+            "<b>Mening kabinetim</b>",
+            "",
+            f"<b>Ism:</b> {_safe(worker.name)}",
+            f"<b>Telefon:</b> {_safe(worker.phone)}",
+            f"<b>Foiz ulushi:</b> {_safe(worker.share_percent)}%",
+            f"<b>Davr:</b> {_safe(period_labels[period_code])}",
+            f"<b>Yuvilgan mashinalar:</b> {washed_count or 0} ta",
+            f"<b>Ishlab topgan summa:</b> "
+            f"{_safe(format_price(int(earnings)))}",
+            "",
+            f"<b>Joriy smena:</b> "
+            f"{'ishda' if is_at_work else 'ishda emas'}",
+            f"<b>Bugungi ish vaqti:</b> {_safe(worked_today)}",
+            "",
+            "<b>Oxirgi 10 ta buyurtma:</b>",
+        ]
+        if not recent_orders:
+            lines.append("Buyurtmalar hali yo'q.")
+        else:
+            for order in recent_orders:
+                order_date = (order.completed_at or order.created_at).astimezone(
+                    TASHKENT
+                )
+                lines.append(
+                    f"• {order_date:%d.%m.%Y} | "
+                    f"{_safe(order.car_model)} | "
+                    f"{_safe(order.plate_number)} | "
+                    f"{_safe(format_price(int(order.car_price)))}"
+                )
+        return "\n".join(lines)
+
+    @router.message(F.text == "Mening kabinetim")
+    async def show_worker_cabinet(message: Message) -> None:
+        if not message.from_user:
+            return
+        text = await render_worker_cabinet(message.from_user.id)
+        if text is None:
+            await message.answer("Siz ishchi sifatida ro'yxatdan o'tmagansiz.")
+            return
+        await message.answer(text, reply_markup=worker_cabinet_period_keyboard())
+
+    @router.callback_query(F.data.startswith("cabinet_period:"))
+    async def change_worker_cabinet_period(callback: CallbackQuery) -> None:
+        period_code = callback.data.split(":", 1)[1]
+        if not callback.from_user:
+            return
+        text = await render_worker_cabinet(callback.from_user.id, period_code)
+        if text is None:
+            await callback.answer("Ishchi kabineti topilmadi.", show_alert=True)
+            return
+        await callback.message.edit_text(
+            text,
+            reply_markup=worker_cabinet_period_keyboard(),
+        )
+        await callback.answer()
 
     async def notify_customer(bot, customer_id: int, text: str) -> None:
         if customer_id <= 0:

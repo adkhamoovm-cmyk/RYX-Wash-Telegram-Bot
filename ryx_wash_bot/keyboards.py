@@ -78,11 +78,21 @@ def report_workers_keyboard(workers: list):
 
 def worker_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
+    builder.add(KeyboardButton(text="Mening kabinetim"))
     builder.row(
         KeyboardButton(text="Ishga keldim"),
         KeyboardButton(text="Ishdan ketdim"),
     )
     return builder.as_markup(resize_keyboard=True)
+
+
+def worker_cabinet_period_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Bugun", callback_data="cabinet_period:today")
+    builder.button(text="Shu hafta", callback_data="cabinet_period:week")
+    builder.button(text="Shu oy", callback_data="cabinet_period:month")
+    builder.adjust(3)
+    return builder.as_markup()
 
 
 def category_keyboard():
