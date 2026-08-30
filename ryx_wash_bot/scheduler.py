@@ -1,4 +1,5 @@
 import logging
+import html
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -15,7 +16,7 @@ from .models import Order, Worker
 
 logger = logging.getLogger(__name__)
 TASHKENT = ZoneInfo("Asia/Tashkent")
-OFFER_TIMEOUT_MINUTES = 3
+DEFAULT_WASH_DURATION_MINUTES = 60
 DAILY_REPORT_JOB_ID = "daily-financial-report"
 
 _sessions: async_sessionmaker[AsyncSession] | None = None
@@ -24,7 +25,7 @@ _settings: Settings | None = None
 _worker_available_handler: Callable[[int, Bot], Awaitable[None]] | None = None
 
 
-def configure_timeout_runtime(
+def configure_wash_timer_runtime(
     sessions: async_sessionmaker[AsyncSession],
     bot: Bot,
     settings: Settings,
@@ -42,30 +43,30 @@ def configure_worker_available_handler(
     _worker_available_handler = handler
 
 
-def offer_timeout_job_id(order_id: int) -> str:
-    return f"worker-offer-timeout:{order_id}"
+def wash_timeout_job_id(order_id: int) -> str:
+    return f"wash-timeout:{order_id}"
 
 
-def schedule_offer_timeout(
+def schedule_wash_timeout(
     scheduler: AsyncIOScheduler,
     order_id: int,
-    assigned_at: datetime,
-    timeout_minutes: int = OFFER_TIMEOUT_MINUTES,
+    washing_started_at: datetime,
+    duration_minutes: int,
 ) -> None:
     scheduler.add_job(
-        expire_worker_offer,
+        expire_wash_timeout,
         trigger="date",
-        run_date=assigned_at + timedelta(minutes=timeout_minutes),
+        run_date=washing_started_at + timedelta(minutes=duration_minutes),
         args=[order_id],
-        id=offer_timeout_job_id(order_id),
+        id=wash_timeout_job_id(order_id),
         replace_existing=True,
         misfire_grace_time=None,
     )
 
 
-def remove_offer_timeout(scheduler: AsyncIOScheduler, order_id: int) -> None:
+def remove_wash_timeout(scheduler: AsyncIOScheduler, order_id: int) -> None:
     try:
-        scheduler.remove_job(offer_timeout_job_id(order_id))
+        scheduler.remove_job(wash_timeout_job_id(order_id))
     except JobLookupError:
         pass
 
@@ -92,76 +93,44 @@ async def send_daily_financial_report() -> None:
         logger.exception("Could not send the daily financial report")
 
 
-async def expire_worker_offer(order_id: int) -> None:
-    """Expire an unanswered offer; callable path is persisted by APScheduler."""
+async def expire_wash_timeout(order_id: int) -> None:
+    """Notify when the allocated washing time has elapsed."""
     if _sessions is None or _bot is None or _settings is None:
         logger.error("Timeout runtime is not configured for order %s", order_id)
         return
 
     async with _sessions() as session:
-        order_snapshot = await session.get(Order, order_id)
-        if order_snapshot and order_snapshot.order_group_id:
-            group_orders = list(
-                (
-                    await session.scalars(
-                        select(Order)
-                        .where(
-                            Order.order_group_id
-                            == order_snapshot.order_group_id
-                        )
-                        .order_by(Order.id)
-                        .with_for_update()
-                    )
-                ).all()
-            )
-            order = next(
-                (item for item in group_orders if item.id == order_id),
-                None,
-            )
-        else:
-            order = await session.get(Order, order_id, with_for_update=True)
-            group_orders = [order] if order else []
+        order = await session.get(Order, order_id, with_for_update=True)
         if (
             order is None
-            or order.status != "ishchiga_yuborildi"
+            or order.status != "yuvish_boshlandi"
             or order.worker_id is None
+            or order.washing_started_at is None
         ):
             return
 
         worker = await session.get(Worker, order.worker_id, with_for_update=True)
         worker_id = order.worker_id
         worker_name = worker.name if worker else str(worker_id)
-        timeout_minutes = order.offer_timeout_minutes or OFFER_TIMEOUT_MINUTES
-        if worker and worker.status == "band":
-            worker.status = "bo'sh"
-
-        order.worker_id = None
-        order.assigned_at = None
-        order.status = "navbatda" if order.queued_offer else "yangi"
-        order.queued_offer = False
-        order.queue_offer_worker_id = None
-        order.queue_prompted_at = None
-        if order.group_mode == "single" and order.order_group_id:
-            siblings = [
-                sibling
-                for sibling in group_orders
-                if sibling.id != order.id and sibling.status == "navbatda"
-            ]
-            for sibling in siblings:
-                sibling.worker_id = None
-                sibling.queue_offer_worker_id = None
-                sibling.queue_prompted_at = None
+        duration_minutes = order.wash_duration_minutes or DEFAULT_WASH_DURATION_MINUTES
         await session.commit()
 
     await _bot.send_message(
         worker_id,
-        f"Buyurtma #{order_id} bo'yicha {timeout_minutes} daqiqalik "
-        "taklif muddati tugadi.",
+        f"⏰ Buyurtma #{order_id} uchun ajratilgan "
+        f"{duration_minutes} daqiqalik yuvish vaqti tugadi.",
     )
     await _bot.send_message(
         _settings.director_id,
-        f"{worker_name} {timeout_minutes} daqiqa ichida javob bermadi "
-        f"(buyurtma #{order_id}).",
+        f"⏰ {_safe_worker_name(worker_name)} uchun buyurtma #{order_id} "
+        f"bo'yicha {duration_minutes} daqiqalik yuvish vaqti tugadi.",
     )
-    if _worker_available_handler is not None:
-        await _worker_available_handler(worker_id, _bot)
+
+
+def _safe_worker_name(name: str) -> str:
+    return html.escape(name)
+
+
+async def expire_worker_offer(order_id: int) -> None:
+    """Compatibility target for offer jobs persisted by older deployments."""
+    logger.info("Ignoring legacy worker-offer timeout job for order %s", order_id)

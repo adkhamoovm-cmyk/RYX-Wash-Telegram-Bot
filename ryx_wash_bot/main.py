@@ -12,7 +12,7 @@ from .config import Settings
 from .db import create_tables, initialize_catalog, make_engine, session_factory
 from .handlers import _new_router
 from .models import User
-from .scheduler import configure_timeout_runtime, schedule_daily_report
+from .scheduler import configure_wash_timer_runtime, schedule_daily_report
 
 
 async def run() -> None:
@@ -50,7 +50,7 @@ async def run() -> None:
         },
         timezone="Asia/Tashkent",
     )
-    configure_timeout_runtime(sessions, bot, settings)
+    configure_wash_timer_runtime(sessions, bot, settings)
     schedule_daily_report(scheduler)
     dispatcher = Dispatcher()
     dispatcher.include_router(_new_router(sessions, settings, scheduler))

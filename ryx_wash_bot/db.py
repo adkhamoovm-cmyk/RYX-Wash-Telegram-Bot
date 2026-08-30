@@ -48,7 +48,7 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS car_color VARCHAR(50),
                     ADD COLUMN IF NOT EXISTS order_group_id VARCHAR(36),
                     ADD COLUMN IF NOT EXISTS group_mode VARCHAR(20),
-                    ADD COLUMN IF NOT EXISTS offer_timeout_minutes INTEGER NOT NULL DEFAULT 3
+                    ADD COLUMN IF NOT EXISTS wash_duration_minutes INTEGER NOT NULL DEFAULT 60
                 """
             )
         )

@@ -61,6 +61,10 @@ class WorkerOrderStates(StatesGroup):
     waiting_payment = State()
 
 
+class DirectorAssignmentStates(StatesGroup):
+    waiting_custom_wash_duration = State()
+
+
 class WorkerRegistrationStates(StatesGroup):
     waiting_user_id = State()
     waiting_name = State()

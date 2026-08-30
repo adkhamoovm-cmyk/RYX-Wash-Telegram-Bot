@@ -144,8 +144,8 @@ class Order(Base):
     )
     group_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="yangi")
-    offer_timeout_minutes: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=3, server_default="3"
+    wash_duration_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=60, server_default="60"
     )
     queued_offer: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="false"

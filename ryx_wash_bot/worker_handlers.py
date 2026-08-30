@@ -23,7 +23,7 @@ from .keyboards import (
     group_workers_keyboard,
     new_order_assignment_keyboard,
     no_available_workers_keyboard,
-    offer_timeout_keyboard,
+    wash_duration_keyboard,
     queue_offer_decision_keyboard,
     worker_cabinet_period_keyboard,
     worker_menu_keyboard,
@@ -35,11 +35,12 @@ from .models import Cancellation, Order, User, Worker
 from .reports import period_bounds
 from .scheduler import (
     configure_worker_available_handler,
-    remove_offer_timeout,
-    schedule_offer_timeout,
+    remove_wash_timeout,
+    schedule_wash_timeout,
 )
 from .states import (
     CancellationStates,
+    DirectorAssignmentStates,
     WorkerOrderStates,
     WorkerCompletionStates,
     WorkerRegistrationStates,
@@ -54,9 +55,6 @@ ACTIVE_ACCEPTED_STATUSES = {
     "yuvish_boshlandi",
     "yakunlanmoqda",
 }
-OFFER_TIMEOUT_OPTIONS = {3, 5, 10, 15, 30}
-
-
 def _safe(value: object) -> str:
     return html.escape(str(value))
 
@@ -236,12 +234,12 @@ def _register_user_routes(
             logger.exception("Could not notify customer %s", customer_id)
 
     def worker_offer_text(order: Order) -> str:
-        timeout_minutes = order.offer_timeout_minutes or 3
+        wash_duration = order.wash_duration_minutes or 60
         return (
             f"<b>🆕 Yangi buyurtma #{order.id}</b>\n\n"
             f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n\n"
-            f"⏱️ Javob berish vaqti: <b>{timeout_minutes} daqiqa</b>\n\n"
+            f"🧼 Yuvish uchun vaqt: <b>{wash_duration} daqiqa</b>\n\n"
             "📥 Buyurtmani qabul qilasizmi?"
         )
 
@@ -304,7 +302,7 @@ def _register_user_routes(
                     sibling.group_mode = "single"
                     sibling_count += 1
             customer = await session.get(User, order.customer_id)
-            timeout_minutes = order.offer_timeout_minutes or 3
+            wash_duration = order.wash_duration_minutes or 60
             text = (
             f"<b>📋 Navbatdagi buyurtma #{order.id}</b>\n\n"
             f"<b>👤 Mijoz:</b> {_safe(customer.name if customer else '—')}\n"
@@ -313,7 +311,7 @@ def _register_user_routes(
             f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
             f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-            f"⏱️ Javob berish vaqti: <b>{timeout_minutes} daqiqa</b>\n"
+            f"🧼 Yuvish uchun vaqt: <b>{wash_duration} daqiqa</b>\n"
             f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
             f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}\n\n"
                 "Buyurtmani qabul qilasizmi?"
@@ -321,12 +319,6 @@ def _register_user_routes(
             latitude = float(order.latitude) if order.latitude is not None else None
             longitude = float(order.longitude) if order.longitude is not None else None
             await session.commit()
-        schedule_offer_timeout(
-            scheduler,
-            order_id,
-            assigned_at,
-            timeout_minutes=timeout_minutes,
-        )
         await bot.send_message(
             worker_id,
             text,
@@ -458,7 +450,7 @@ def _register_user_routes(
         )
 
     @router.callback_query(F.data.startswith("group_worker:"))
-    async def choose_group_offer_timeout(callback: CallbackQuery) -> None:
+    async def choose_group_wash_duration(callback: CallbackQuery) -> None:
         _, lead_order_id_raw, worker_id_raw = callback.data.split(":")
         lead_order_id, worker_id = int(lead_order_id_raw), int(worker_id_raw)
         async with sessions() as session:
@@ -497,24 +489,24 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            "⏱️ Ishchiga javob berish vaqtini tanlang:",
-            reply_markup=offer_timeout_keyboard(
-                "group_worker_timeout", lead_order_id, worker_id
+            "🧼 Mashinani yuvish uchun vaqtni tanlang:",
+            reply_markup=wash_duration_keyboard(
+                "group_worker_wash_duration", lead_order_id, worker_id
             ),
         )
 
-    @router.callback_query(F.data.startswith("group_worker_timeout:"))
-    async def assign_group_to_worker_with_timeout(
+    @router.callback_query(F.data.startswith("group_worker_wash_duration:"))
+    async def assign_group_to_worker_with_wash_duration(
         callback: CallbackQuery,
     ) -> None:
-        _, lead_order_id_raw, worker_id_raw, timeout_raw = callback.data.split(":")
-        lead_order_id, worker_id, timeout_minutes = (
+        _, lead_order_id_raw, worker_id_raw, duration_raw = callback.data.split(":")
+        lead_order_id, worker_id, wash_duration = (
             int(lead_order_id_raw),
             int(worker_id_raw),
-            int(timeout_raw),
+            int(duration_raw),
         )
-        if timeout_minutes not in OFFER_TIMEOUT_OPTIONS:
-            await callback.answer("❌ Vaqt tanlovi noto'g'ri.", show_alert=True)
+        if not 30 <= wash_duration <= 120:
+            await callback.answer("❌ Yuvish vaqti noto'g'ri.", show_alert=True)
             return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
@@ -561,7 +553,7 @@ def _register_user_routes(
                 order.status = "navbatda"
                 order.worker_id = worker_id
                 order.group_mode = "single"
-                order.offer_timeout_minutes = timeout_minutes
+                order.wash_duration_minutes = wash_duration
             lead_order_id = orders[0].id
             worker_was_free = worker.status == "bo'sh"
             worker_name = worker.name
@@ -585,7 +577,7 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.answer(
             f"✅ Guruhdagi {len(orders)} ta mashina {worker_name} ga biriktirildi.\n"
-            f"⏱️ Javob berish vaqti: {timeout_minutes} daqiqa."
+            f"🧼 Yuvish uchun vaqt: {wash_duration} daqiqa."
         )
 
     @router.callback_query(F.data.startswith("group_split:"))
@@ -896,7 +888,7 @@ def _register_user_routes(
         )
 
     @router.callback_query(F.data.startswith("queue_worker:"))
-    async def choose_queued_offer_timeout(callback: CallbackQuery) -> None:
+    async def choose_queued_wash_duration(callback: CallbackQuery) -> None:
         _, order_id_raw, worker_id_raw = callback.data.split(":")
         order_id, worker_id = int(order_id_raw), int(worker_id_raw)
         async with sessions() as session:
@@ -932,22 +924,22 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            "⏱️ Navbatdagi taklif uchun javob berish vaqtini tanlang:",
-            reply_markup=offer_timeout_keyboard(
-                "queue_worker_timeout", order_id, worker_id
+            "🧼 Navbatdagi mashinani yuvish uchun vaqtni tanlang:",
+            reply_markup=wash_duration_keyboard(
+                "queue_worker_wash_duration", order_id, worker_id
             ),
         )
 
-    @router.callback_query(F.data.startswith("queue_worker_timeout:"))
+    @router.callback_query(F.data.startswith("queue_worker_wash_duration:"))
     async def assign_to_busy_worker(callback: CallbackQuery) -> None:
-        _, order_id_raw, worker_id_raw, timeout_raw = callback.data.split(":")
-        order_id, worker_id, timeout_minutes = (
+        _, order_id_raw, worker_id_raw, duration_raw = callback.data.split(":")
+        order_id, worker_id, wash_duration = (
             int(order_id_raw),
             int(worker_id_raw),
-            int(timeout_raw),
+            int(duration_raw),
         )
-        if timeout_minutes not in OFFER_TIMEOUT_OPTIONS:
-            await callback.answer("❌ Vaqt tanlovi noto'g'ri.", show_alert=True)
+        if not 30 <= wash_duration <= 120:
+            await callback.answer("❌ Yuvish vaqti noto'g'ri.", show_alert=True)
             return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
@@ -980,7 +972,7 @@ def _register_user_routes(
                 return
             order.status = "navbatda"
             order.worker_id = worker_id
-            order.offer_timeout_minutes = timeout_minutes
+            order.wash_duration_minutes = wash_duration
             order.queued_offer = False
             order.queue_offer_worker_id = None
             order.queue_prompted_at = None
@@ -1002,7 +994,7 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.answer(
             f"Buyurtma #{order_id} {worker_name} uchun navbatga biriktirildi.\n"
-            f"⏱️ Javob berish vaqti: {timeout_minutes} daqiqa."
+            f"🧼 Yuvish uchun vaqt: {wash_duration} daqiqa."
         )
 
     @router.callback_query(F.data.startswith("queue_offer:"))
@@ -1055,7 +1047,7 @@ def _register_user_routes(
         await callback.answer("✅ Navbatdagi buyurtma ishchiga yuborildi.")
 
     @router.callback_query(F.data.startswith("assign_worker:"))
-    async def choose_offer_timeout(
+    async def choose_wash_duration(
         callback: CallbackQuery,
     ) -> None:
         if not callback.from_user:
@@ -1083,26 +1075,26 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            "⏱️ Ishchiga javob berish vaqtini tanlang:",
-            reply_markup=offer_timeout_keyboard(
-                "assign_worker_timeout", order_id, worker_id
+            "🧼 Mashinani yuvish uchun vaqtni tanlang:",
+            reply_markup=wash_duration_keyboard(
+                "assign_worker_wash_duration", order_id, worker_id
             ),
         )
 
-    @router.callback_query(F.data.startswith("assign_worker_timeout:"))
+    @router.callback_query(F.data.startswith("assign_worker_wash_duration:"))
     async def assign_order(
         callback: CallbackQuery,
     ) -> None:
         if not callback.from_user:
             return
-        _, order_id_raw, worker_id_raw, timeout_raw = callback.data.split(":")
-        order_id, worker_id, timeout_minutes = (
+        _, order_id_raw, worker_id_raw, duration_raw = callback.data.split(":")
+        order_id, worker_id, wash_duration = (
             int(order_id_raw),
             int(worker_id_raw),
-            int(timeout_raw),
+            int(duration_raw),
         )
-        if timeout_minutes not in OFFER_TIMEOUT_OPTIONS:
-            await callback.answer("❌ Vaqt tanlovi noto'g'ri.", show_alert=True)
+        if not 30 <= wash_duration <= 120:
+            await callback.answer("❌ Yuvish vaqti noto'g'ri.", show_alert=True)
             return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
@@ -1126,7 +1118,7 @@ def _register_user_routes(
                     queue_prompted_at=None,
                     assigned_at=assigned_at,
                     status="ishchiga_yuborildi",
-                    offer_timeout_minutes=timeout_minutes,
+                    wash_duration_minutes=wash_duration,
                     queued_offer=case(
                         (Order.status == "navbatda", True),
                         else_=False,
@@ -1176,12 +1168,6 @@ def _register_user_routes(
                 raise RuntimeError("Claimed assignment rows could not be reloaded")
             worker_name = worker.name
             worker_text = worker_offer_text(order)
-        schedule_offer_timeout(
-            scheduler,
-            order_id,
-            assigned_at,
-            timeout_minutes=timeout_minutes,
-        )
         await callback.bot.send_message(
             worker_id,
             worker_text,
@@ -1193,8 +1179,107 @@ def _register_user_routes(
         )
         await callback.message.answer(
             f"Buyurtma #{order_id} {worker_name} ishchiga yuborildi.\n"
-            f"⏱️ Javob berish vaqti: {timeout_minutes} daqiqa."
+            f"🧼 Yuvish uchun vaqt: {wash_duration} daqiqa."
         )
+
+    @router.callback_query(
+        F.data.startswith("assign_worker_wash_duration_custom:")
+    )
+    @router.callback_query(
+        F.data.startswith("group_worker_wash_duration_custom:")
+    )
+    @router.callback_query(
+        F.data.startswith("queue_worker_wash_duration_custom:")
+    )
+    async def request_custom_wash_duration(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not callback.from_user:
+            return
+        prefix, order_id_raw, worker_id_raw = callback.data.split(":")
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer(
+                    "❌ Bu amal faqat direktor uchun.", show_alert=True
+                )
+                return
+        if prefix.startswith("assign_worker"):
+            assignment_kind = "direct"
+        elif prefix.startswith("group_worker"):
+            assignment_kind = "group"
+        else:
+            assignment_kind = "busy"
+        await state.set_state(DirectorAssignmentStates.waiting_custom_wash_duration)
+        await state.update_data(
+            assignment_kind=assignment_kind,
+            order_id=int(order_id_raw),
+            worker_id=int(worker_id_raw),
+        )
+        await callback.answer()
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            "✍️ Yuvish vaqtini daqiqada kiriting (30 dan 120 gacha):"
+        )
+
+    class _CustomCallbackMessage:
+        def __init__(self, message: Message) -> None:
+            self._message = message
+
+        async def answer(self, *args, **kwargs):
+            return await self._message.answer(*args, **kwargs)
+
+        async def edit_reply_markup(self, *args, **kwargs):
+            return None
+
+    class _CustomCallback:
+        def __init__(self, message: Message, data: str) -> None:
+            self.from_user = message.from_user
+            self.bot = message.bot
+            self.message = _CustomCallbackMessage(message)
+            self.data = data
+
+        async def answer(self, *args, **kwargs):
+            return None
+
+    @router.message(DirectorAssignmentStates.waiting_custom_wash_duration, F.text)
+    async def receive_custom_wash_duration(
+        message: Message, state: FSMContext
+    ) -> None:
+        value = message.text.strip()
+        if not value.isdigit() or not 30 <= int(value) <= 120:
+            await message.answer("❌ Vaqt 30 dan 120 gacha butun daqiqa bo‘lsin.")
+            return
+        data = await state.get_data()
+        assignment_kind = data.get("assignment_kind")
+        order_id = data.get("order_id")
+        worker_id = data.get("worker_id")
+        if (
+            assignment_kind not in {"direct", "group", "busy"}
+            or not isinstance(order_id, int)
+            or not isinstance(worker_id, int)
+        ):
+            await state.clear()
+            await message.answer("❌ Yuvish vaqti ma'lumoti topilmadi.")
+            return
+        await state.clear()
+        duration = int(value)
+        callback_prefix = {
+            "direct": "assign_worker_wash_duration",
+            "group": "group_worker_wash_duration",
+            "busy": "queue_worker_wash_duration",
+        }[assignment_kind]
+        callback = _CustomCallback(
+            message,
+            f"{callback_prefix}:{order_id}:{worker_id}:{duration}",
+        )
+        if assignment_kind == "direct":
+            await assign_order(
+                callback,
+            )
+        elif assignment_kind == "group":
+            await assign_group_to_worker_with_wash_duration(callback)
+        else:
+            await assign_to_busy_worker(callback)
 
     async def worker_order_and_worker(
         session: AsyncSession, order_id: int, worker_id: int
@@ -1237,6 +1322,8 @@ def _register_user_routes(
             f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
             f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+            f"🧼 <b>Yuvish vaqti:</b> "
+            f"{_safe(order.wash_duration_minutes or 60)} daqiqa\n"
             f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
             f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
             )
@@ -1245,7 +1332,6 @@ def _register_user_routes(
             address = order.address
             car_photo_id = order.car_photo_id
             customer_id = order.customer_id
-        remove_offer_timeout(scheduler, order_id)
         await notify_customer(
             callback.bot,
             customer_id,
@@ -1326,7 +1412,6 @@ def _register_user_routes(
                     sibling.queue_prompted_at = None
             worker_name = worker.name
             await session.commit()
-        remove_offer_timeout(scheduler, order_id)
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.bot.send_message(
             settings.director_id,
@@ -1409,7 +1494,7 @@ def _register_user_routes(
                 )
             )
             await session.commit()
-        remove_offer_timeout(scheduler, order_id)
+        remove_wash_timeout(scheduler, order_id)
         await bot.send_message(
             settings.director_id,
             f"🚫 Buyurtma #{order_id} bekor qilindi. Sabab: {_safe(reason)}",
@@ -1538,13 +1623,22 @@ def _register_user_routes(
                         return
                     order.status = "yakunlanmoqda"
                     await session.commit()
+                    remove_wash_timeout(scheduler, order_id)
                     await state.set_state(WorkerCompletionStates.waiting_before_photo)
                     await state.update_data(order_id=order_id)
                     await callback.message.edit_reply_markup(reply_markup=None)
-                    await callback.message.answer(
-                        "✅ Ish tugadi. Birinchi rasmni yuboring (Oldin):",
-                        reply_markup=ReplyKeyboardRemove(),
-                    )
+                    if not order.plate_number:
+                        await state.set_state(WorkerOrderStates.waiting_plate)
+                        await callback.message.answer(
+                            "✅ Yuvish tugadi. Endi mashinaning davlat raqamini "
+                            "kiriting:",
+                            reply_markup=ReplyKeyboardRemove(),
+                        )
+                    else:
+                        await callback.message.answer(
+                            "✅ Ish tugadi. Birinchi rasmni yuboring (Oldin):",
+                            reply_markup=ReplyKeyboardRemove(),
+                        )
                     await callback.answer()
                     return
                 await callback.answer("❌ Noto'g'ri status.", show_alert=True)
@@ -1556,33 +1650,25 @@ def _register_user_routes(
                     "Statuslarni ketma-ket yangilang.", show_alert=True
                 )
                 return
-            if stage == "arrived" and (
-                not order.plate_number or not order.payment_method
-            ):
+            if stage == "arrived" and not order.payment_method:
                 await state.update_data(order_id=order_id)
                 await callback.answer()
                 await callback.message.edit_reply_markup(reply_markup=None)
-                if not order.plate_number:
-                    await state.set_state(WorkerOrderStates.waiting_plate)
-                    await callback.message.answer(
-                        "🪪 Mashinani ko‘rdingizmi? Endi uning davlat raqamini "
-                        "kiriting:",
-                        reply_markup=ReplyKeyboardRemove(),
-                    )
-                else:
-                    await state.set_state(WorkerOrderStates.waiting_payment)
-                    await callback.message.answer(
-                        "💳 Mijoz oldidagi to‘lov turini tanlang:",
-                        reply_markup=worker_payment_keyboard(order_id),
-                    )
+                await state.set_state(WorkerOrderStates.waiting_payment)
+                await callback.message.answer(
+                    "💳 Mijoz oldidagi to‘lov turini tanlang:",
+                    reply_markup=worker_payment_keyboard(order_id),
+                )
                 return
             order.status = new_status
+            wash_duration = None
             if stage == "route":
                 order.route_started_at = timestamp
             elif stage == "arrived":
                 order.arrived_at = timestamp
             elif stage == "washing":
                 order.washing_started_at = timestamp
+                wash_duration = order.wash_duration_minutes or 60
             await session.commit()
             model = order.car_model
             plate = order.plate_number
@@ -1594,6 +1680,17 @@ def _register_user_routes(
         await callback.message.edit_reply_markup(
             reply_markup=worker_status_keyboard(order_id, next_stage)
         )
+        if stage == "washing":
+            schedule_wash_timeout(
+                scheduler,
+                order_id,
+                timestamp,
+                duration_minutes=wash_duration or 60,
+            )
+            await callback.message.answer(
+                f"🧼 Yuvish boshlandi. Ajratilgan vaqt: "
+                f"<b>{wash_duration or 60} daqiqa</b>."
+            )
         if stage == "arrived":
             async with sessions() as session:
                 order = await session.get(Order, order_id)
@@ -1626,8 +1723,7 @@ def _register_user_routes(
             if (
                 not order
                 or not worker
-                or order.status != "yo‘lda"
-                and order.status != "yo'lda"
+                or order.status != "yakunlanmoqda"
             ):
                 await state.clear()
                 await message.answer(
@@ -1636,11 +1732,11 @@ def _register_user_routes(
                 return
             order.plate_number = plate
             await session.commit()
-        await state.set_state(WorkerOrderStates.waiting_payment)
+        await state.set_state(WorkerCompletionStates.waiting_before_photo)
         await message.answer(
             f"✅ Davlat raqami saqlandi: <b>{_safe(plate)}</b>\n"
-            "Endi mijoz oldidagi to‘lov turini tanlang:",
-            reply_markup=worker_payment_keyboard(order_id),
+            "Birinchi rasmni yuboring (Oldin):",
+            reply_markup=ReplyKeyboardRemove(),
         )
 
     @router.callback_query(
@@ -1669,11 +1765,10 @@ def _register_user_routes(
                 not order
                 or not worker
                 or order.status not in {"yo‘lda", "yo'lda"}
-                or not order.plate_number
             ):
                 await state.clear()
                 await callback.answer(
-                    "❌ Buyurtma topilmadi yoki avval davlat raqamini kiriting.",
+                    "❌ Buyurtma topilmadi yoki bu bosqich endi faol emas.",
                     show_alert=True,
                 )
                 return

@@ -277,13 +277,18 @@ def group_workers_keyboard(lead_order_id: int, workers: list):
     return builder.as_markup()
 
 
-def offer_timeout_keyboard(prefix: str, *parts: int):
+def wash_duration_keyboard(prefix: str, *parts: int):
     builder = InlineKeyboardBuilder()
-    for minutes in (3, 5, 10, 15, 30):
+    for minutes in (30, 45, 60, 90, 120):
         suffix = ":".join(str(part) for part in parts)
         callback_data = f"{prefix}:{suffix}:{minutes}"
-        builder.button(text=f"⏱️ {minutes} daqiqa", callback_data=callback_data)
-    builder.adjust(2)
+        builder.button(text=f"🧼 {minutes} daqiqa", callback_data=callback_data)
+    custom_suffix = ":".join(str(part) for part in parts)
+    builder.button(
+        text="✍️ Boshqa vaqtni kiritish",
+        callback_data=f"{prefix}_custom:{custom_suffix}",
+    )
+    builder.adjust(2, 1)
     return builder.as_markup()
 
 

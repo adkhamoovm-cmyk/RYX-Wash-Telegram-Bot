@@ -18,7 +18,10 @@ from ryx_wash_bot.handlers import (
 )
 from ryx_wash_bot.keyboards import saved_cars_keyboard
 from ryx_wash_bot.models import Base, CustomerCar, Expense, Order, User, Worker
-from ryx_wash_bot.scheduler import configure_timeout_runtime, expire_worker_offer
+from ryx_wash_bot.scheduler import (
+    configure_wash_timer_runtime,
+    expire_wash_timeout,
+)
 from ryx_wash_bot import worker_handlers
 
 
@@ -248,7 +251,7 @@ def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
             order_ids = await add_group(sessions)
             bot = RecordingBot()
 
-            await handler(router, "callback_query", "choose_group_offer_timeout")(
+            await handler(router, "callback_query", "choose_group_wash_duration")(
                 RecordingCallback(
                     f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
                     DIRECTOR_ID,
@@ -256,10 +259,10 @@ def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
                 )
             )
             await handler(
-                router, "callback_query", "assign_group_to_worker_with_timeout"
+                router, "callback_query", "assign_group_to_worker_with_wash_duration"
             )(
                 RecordingCallback(
-                    f"group_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:10",
+                    f"group_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -269,12 +272,9 @@ def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
                 ("ishchiga_yuborildi", WORKER_ONE_ID),
                 ("navbatda", WORKER_ONE_ID),
             ]
-            assert all(order.offer_timeout_minutes == 10 for order in orders)
-            timeout_job = scheduler.jobs[f"worker-offer-timeout:{order_ids[0]}"]
-            scheduled_at = timeout_job["run_date"].replace(tzinfo=None)
-            assigned_at = orders[0].assigned_at.replace(tzinfo=None)
-            assert scheduled_at - assigned_at == timedelta(minutes=10)
-            assert any("10 daqiqa" in text for text in bot.messages())
+            assert all(order.wash_duration_minutes == 60 for order in orders)
+            assert not scheduler.jobs
+            assert any("60 daqiqa" in text for text in bot.messages())
 
             await handler(router, "callback_query", "accept_order")(
                 RecordingCallback(
@@ -577,7 +577,7 @@ def test_director_can_edit_an_expense_amount_and_description():
     run(scenario())
 
 
-def test_worker_enters_missing_manual_order_plate_at_arrival():
+def test_worker_enters_missing_manual_order_plate_after_washing():
     async def scenario():
         engine, sessions, settings, _scheduler, router = await make_context()
         try:
@@ -611,7 +611,7 @@ def test_worker_enters_missing_manual_order_plate_at_arrival():
                             car_price=Decimal("50000"),
                             plate_number=None,
                             payment_method=None,
-                            status="yo'lda",
+                            status="yakunlanmoqda",
                         ),
                     ]
                 )
@@ -638,30 +638,10 @@ def test_worker_enters_missing_manual_order_plate_at_arrival():
                 assert order is not None
                 assert order.plate_number == "01 A 123 BC"
                 assert order.payment_method is None
-                assert order.status == "yo'lda"
+                assert order.status == "yakunlanmoqda"
 
-            payment_callback = RecordingCallback(
-                f"worker_payment:Karta:{order_id}",
-                WORKER_ONE_ID,
-                bot,
-            )
-            await handler(router, "callback_query", "receive_worker_payment")(
-                payment_callback, state
-            )
-
-            async with sessions() as session:
-                order = await session.get(Order, order_id)
-                assert order is not None
-                assert order.plate_number == "01 A 123 BC"
-                assert order.payment_method == "Karta"
-                assert order.status == "yetib_keldi"
-
-            assert state.cleared is True
-            assert any(
-                "01 A 123 BC" in str(call[2])
-                for call in bot.calls
-                if call[0] == "send_message" and call[1] == settings.director_id
-            )
+            assert state.cleared is False
+            assert any("Birinchi rasmni yuboring" in str(text) for text, _ in message.answer_calls)
         finally:
             await engine.dispose()
 
@@ -739,7 +719,7 @@ def test_single_worker_reject_releases_every_group_sibling():
             await add_people(sessions)
             order_ids = await add_group(sessions)
             bot = RecordingBot()
-            await handler(router, "callback_query", "choose_group_offer_timeout")(
+            await handler(router, "callback_query", "choose_group_wash_duration")(
                 RecordingCallback(
                     f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
                     DIRECTOR_ID,
@@ -747,10 +727,10 @@ def test_single_worker_reject_releases_every_group_sibling():
                 )
             )
             await handler(
-                router, "callback_query", "assign_group_to_worker_with_timeout"
+                router, "callback_query", "assign_group_to_worker_with_wash_duration"
             )(
                 RecordingCallback(
-                    f"group_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:5",
+                    f"group_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -772,14 +752,14 @@ def test_single_worker_reject_releases_every_group_sibling():
     run(scenario())
 
 
-def test_single_worker_timeout_releases_pending_group_without_stale_binding():
+def test_wash_timer_notifies_worker_without_releasing_group_assignment():
     async def scenario():
-        engine, sessions, settings, _scheduler, router = await make_context()
+        engine, sessions, settings, scheduler, router = await make_context()
         try:
             await add_people(sessions)
             order_ids = await add_group(sessions)
             bot = RecordingBot()
-            await handler(router, "callback_query", "choose_group_offer_timeout")(
+            await handler(router, "callback_query", "choose_group_wash_duration")(
                 RecordingCallback(
                     f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
                     DIRECTOR_ID,
@@ -787,26 +767,57 @@ def test_single_worker_timeout_releases_pending_group_without_stale_binding():
                 )
             )
             await handler(
-                router, "callback_query", "assign_group_to_worker_with_timeout"
+                router, "callback_query", "assign_group_to_worker_with_wash_duration"
             )(
                 RecordingCallback(
-                    f"group_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:15",
+                    f"group_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
                     DIRECTOR_ID,
                     bot,
                 )
             )
-            configure_timeout_runtime(sessions, bot, settings)
-            # The timeout's queue hand-off is a separate concern; inspect the
-            # persisted group immediately after its atomic release.
-            worker_handlers._worker_available_handler = None
-            await expire_worker_offer(order_ids[0])
+            await handler(router, "callback_query", "accept_order")(
+                RecordingCallback(
+                    f"worker_accept:{order_ids[0]}", WORKER_ONE_ID, bot
+                )
+            )
+            state = RecordingState()
+            update_status = handler(
+                router, "callback_query", "update_worker_status"
+            )
+            await update_status(
+                RecordingCallback(
+                    f"worker_status:route:{order_ids[0]}",
+                    WORKER_ONE_ID,
+                    bot,
+                ),
+                state,
+            )
+            await update_status(
+                RecordingCallback(
+                    f"worker_status:arrived:{order_ids[0]}",
+                    WORKER_ONE_ID,
+                    bot,
+                ),
+                state,
+            )
+            await update_status(
+                RecordingCallback(
+                    f"worker_status:washing:{order_ids[0]}",
+                    WORKER_ONE_ID,
+                    bot,
+                ),
+                state,
+            )
+            configure_wash_timer_runtime(sessions, bot, settings)
+            await expire_wash_timeout(order_ids[0])
             orders = await load_orders(sessions, order_ids)
-            assert all(order.worker_id is None for order in orders)
-            assert all(order.status == "navbatda" for order in orders)
+            assert all(order.worker_id == WORKER_ONE_ID for order in orders)
+            assert orders[0].status == "yuvish_boshlandi"
+            assert f"wash-timeout:{order_ids[0]}" in scheduler.jobs
             async with sessions() as session:
                 worker = await session.get(Worker, WORKER_ONE_ID)
-                assert worker.status == "bo'sh"
-            assert any("muddati tugadi" in text for text in bot.messages())
+                assert worker.status == "band"
+            assert any("60 daqiqalik yuvish vaqti tugadi" in text for text in bot.messages())
         finally:
             await engine.dispose()
 
@@ -822,7 +833,7 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             await add_people(sessions)
             order_ids = await add_group(sessions)
             bot = RecordingBot()
-            await handler(router, "callback_query", "choose_group_offer_timeout")(
+            await handler(router, "callback_query", "choose_group_wash_duration")(
                 RecordingCallback(
                     f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
                     DIRECTOR_ID,
@@ -830,10 +841,10 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
                 )
             )
             await handler(
-                router, "callback_query", "assign_group_to_worker_with_timeout"
+                router, "callback_query", "assign_group_to_worker_with_wash_duration"
             )(
                 RecordingCallback(
-                    f"group_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:10",
+                    f"group_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -886,7 +897,7 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             assert orders[0].status == "yakunlandi"
             assert orders[1].status == "ishchiga_yuborildi"
             assert orders[1].worker_id == WORKER_ONE_ID
-            assert scheduler.jobs
+            assert not scheduler.jobs
             async with sessions() as session:
                 worker = await session.get(Worker, WORKER_ONE_ID)
                 assert worker.status == "band"
@@ -913,7 +924,7 @@ def test_split_group_assigns_each_car_to_a_different_worker_independently():
             )
             assign = handler(router, "callback_query", "assign_order")
             choose_timeout = handler(
-                router, "callback_query", "choose_offer_timeout"
+                router, "callback_query", "choose_wash_duration"
             )
             await choose_timeout(
                 RecordingCallback(
@@ -924,7 +935,7 @@ def test_split_group_assigns_each_car_to_a_different_worker_independently():
             )
             await assign(
                 RecordingCallback(
-                    f"assign_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:10",
+                    f"assign_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -938,7 +949,7 @@ def test_split_group_assigns_each_car_to_a_different_worker_independently():
             )
             await assign(
                 RecordingCallback(
-                    f"assign_worker_timeout:{order_ids[1]}:{WORKER_TWO_ID}:15",
+                    f"assign_worker_wash_duration:{order_ids[1]}:{WORKER_TWO_ID}:90",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -950,6 +961,36 @@ def test_split_group_assigns_each_car_to_a_different_worker_independently():
                 WORKER_TWO_ID,
             ]
             assert all(order.status == "ishchiga_yuborildi" for order in orders)
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_director_can_enter_custom_wash_duration():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            order_id = (await add_group(sessions, count=1))[0]
+            bot = RecordingBot()
+            state = RecordingState()
+            await handler(router, "callback_query", "request_custom_wash_duration")(
+                RecordingCallback(
+                    f"assign_worker_wash_duration_custom:{order_id}:{WORKER_ONE_ID}",
+                    DIRECTOR_ID,
+                    bot,
+                ),
+                state,
+            )
+            await handler(router, "message", "receive_custom_wash_duration")(
+                RecordingMessage(bot, DIRECTOR_ID, "75"),
+                state,
+            )
+            orders = await load_orders(sessions, [order_id])
+            assert orders[0].wash_duration_minutes == 75
+            assert orders[0].status == "ishchiga_yuborildi"
+            assert any("75 daqiqa" in text for text in bot.messages())
         finally:
             await engine.dispose()
 
@@ -981,14 +1022,14 @@ def test_parallel_assign_callbacks_only_allow_one_worker_to_claim_order(tmp_path
                 for worker_id in (WORKER_ONE_ID, WORKER_TWO_ID)
             ]
             choose_timeout = handler(
-                router, "callback_query", "choose_offer_timeout"
+                router, "callback_query", "choose_wash_duration"
             )
             assign = handler(router, "callback_query", "assign_order")
 
             await asyncio.gather(*(choose_timeout(callback) for callback in callbacks))
             timeout_callbacks = [
                 RecordingCallback(
-                    f"assign_worker_timeout:{order_id}:{worker_id}:10",
+                    f"assign_worker_wash_duration:{order_id}:{worker_id}:60",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -1033,8 +1074,8 @@ def test_parallel_assign_callbacks_only_allow_one_worker_to_claim_order(tmp_path
                 and call[1] in {WORKER_ONE_ID, WORKER_TWO_ID}
                 for call in bot.calls
             ) == 1
-            assert len(scheduler.jobs) == 1
-            assert len(scheduler.add_job_calls) == 1
+            assert not scheduler.jobs
+            assert not scheduler.add_job_calls
             assert sum(
                 answer == "Bu buyurtma allaqachon ishchiga yuborilgan."
                 and kwargs.get("show_alert") is True
@@ -1142,9 +1183,24 @@ def test_long_group_summary_and_statistics_split_every_telegram_message():
                 session.add_all(completed)
                 await session.commit()
             message = RecordingMessage(bot, DIRECTOR_ID, "Statistika")
-            await handler(router, "message", "director_statistics")(message)
-            assert len(message.answer_calls) > 1
-            assert all(len(str(text)) <= 4096 for text, _kwargs in message.answer_calls)
+            state = RecordingState()
+            await handler(router, "message", "start_report")(message, state)
+            await handler(router, "callback_query", "choose_report_period")(
+                RecordingCallback("report_period:month", DIRECTOR_ID, bot),
+                state,
+            )
+            report_callback = RecordingCallback(
+                "report_worker:all", DIRECTOR_ID, bot
+            )
+            await handler(router, "callback_query", "generate_report")(
+                report_callback,
+                state,
+            )
+            assert len(report_callback.message.answer_calls) > 1
+            assert all(
+                len(str(text)) <= 4096
+                for text, _kwargs in report_callback.message.answer_calls
+            )
         finally:
             await engine.dispose()
 
@@ -1160,7 +1216,7 @@ def test_offline_customer_does_not_stop_worker_acceptance_flow():
                 sessions, customer_id=-1, group_id="offline-group", count=1
             )
             bot = RecordingBot()
-            await handler(router, "callback_query", "choose_offer_timeout")(
+            await handler(router, "callback_query", "choose_wash_duration")(
                 RecordingCallback(
                     f"assign_worker:{order_ids[0]}:{WORKER_ONE_ID}",
                     DIRECTOR_ID,
@@ -1169,7 +1225,7 @@ def test_offline_customer_does_not_stop_worker_acceptance_flow():
             )
             await handler(router, "callback_query", "assign_order")(
                 RecordingCallback(
-                    f"assign_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:3",
+                    f"assign_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
                     DIRECTOR_ID,
                     bot,
                 )
