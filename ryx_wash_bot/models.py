@@ -46,7 +46,9 @@ class Worker(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="worker")
-    orders: Mapped[list["Order"]] = relationship(back_populates="worker")
+    orders: Mapped[list["Order"]] = relationship(
+        back_populates="worker", foreign_keys="Order.worker_id"
+    )
 
 
 class Order(Base):
@@ -59,6 +61,9 @@ class Order(Base):
     worker_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("workers.user_id"), nullable=True, index=True
     )
+    queue_offer_worker_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("workers.user_id"), nullable=True
+    )
     car_category: Mapped[str] = mapped_column(String(50), nullable=False)
     car_model: Mapped[str] = mapped_column(String(100), nullable=False)
     car_price: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
@@ -68,6 +73,12 @@ class Order(Base):
     longitude: Mapped[Decimal] = mapped_column(Numeric(10, 7), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="yangi")
+    queued_offer: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
+    queue_prompted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     assigned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -94,7 +105,9 @@ class Order(Base):
     )
 
     customer: Mapped[User] = relationship(back_populates="orders")
-    worker: Mapped[Worker | None] = relationship(back_populates="orders")
+    worker: Mapped[Worker | None] = relationship(
+        back_populates="orders", foreign_keys=[worker_id]
+    )
     cancellations: Mapped[list["Cancellation"]] = relationship(back_populates="order")
 
 

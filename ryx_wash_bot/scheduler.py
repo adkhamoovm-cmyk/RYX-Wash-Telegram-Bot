@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -17,6 +18,7 @@ OFFER_TIMEOUT_MINUTES = 3
 _sessions: async_sessionmaker[AsyncSession] | None = None
 _bot: Bot | None = None
 _settings: Settings | None = None
+_worker_available_handler: Callable[[int, Bot], Awaitable[None]] | None = None
 
 
 def configure_timeout_runtime(
@@ -28,6 +30,13 @@ def configure_timeout_runtime(
     _sessions = sessions
     _bot = bot
     _settings = settings
+
+
+def configure_worker_available_handler(
+    handler: Callable[[int, Bot], Awaitable[None]],
+) -> None:
+    global _worker_available_handler
+    _worker_available_handler = handler
 
 
 def offer_timeout_job_id(order_id: int) -> str:
@@ -80,7 +89,10 @@ async def expire_worker_offer(order_id: int) -> None:
 
         order.worker_id = None
         order.assigned_at = None
-        order.status = "yangi"
+        order.status = "navbatda" if order.queued_offer else "yangi"
+        order.queued_offer = False
+        order.queue_offer_worker_id = None
+        order.queue_prompted_at = None
         await session.commit()
 
     await _bot.send_message(
@@ -91,3 +103,5 @@ async def expire_worker_offer(order_id: int) -> None:
         _settings.director_id,
         f"{worker_name} so'rovga javob bermadi (buyurtma #{order_id}).",
     )
+    if _worker_available_handler is not None:
+        await _worker_available_handler(worker_id, _bot)

@@ -43,3 +43,15 @@ The initial vehicle catalog and prices are in `ryx_wash_bot/catalog.py`.
   again and the director can resend the original order.
 - Directors and the worker assigned to an order can cancel it. A predefined or
   custom non-empty reason is stored in the `cancellations` table.
+
+## Order queue
+
+- When no worker is available, the director can leave an order in the global
+  queue or attach it to a busy worker as that worker's next order.
+- A busy worker sees only the number of queued orders, not their details.
+- Worker-specific queued orders are opened in FIFO order after the current job
+  finishes. Each opened offer gets its own persistent three-minute timeout.
+- If a newly available worker has no preassigned order, the director receives a
+  yes/no prompt for the oldest global queued order.
+- Rejected or expired queued offers return to the global queue and can be
+  reassigned through the original **Ishchilarga yuborish** button.

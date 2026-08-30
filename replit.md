@@ -41,10 +41,11 @@ Telegram bot that registers car wash customers and sends new service orders to t
 Customers register with their name and Telegram contact, select a car and payment method, share a service location, and create an order. The director receives order details and a Telegram location.
 The director can register workers and assign orders to available staff. Workers manage shifts, accept or reject assignments, report progress, and finish with before/after photos.
 Worker offers expire after three minutes even across bot restarts. Directors and assigned workers can cancel active orders with a required reason.
+When everyone is busy, orders can enter a global FIFO queue or a worker-specific queue. A worker never receives a second active order; queued details open only after the current order ends.
 
 ## User preferences
 
-- Keep the currently requested single-worker happy path simple; do not add assignment timeouts, manual director orders, or order cancellation until requested.
+- Do not add manual director orders or multiple customer vehicles until requested.
 
 ## Gotchas
 

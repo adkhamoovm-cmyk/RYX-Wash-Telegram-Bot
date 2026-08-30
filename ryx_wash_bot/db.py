@@ -30,6 +30,7 @@ async def create_tables(engine: AsyncEngine) -> None:
                 """
                 ALTER TABLE orders
                     ADD COLUMN IF NOT EXISTS worker_id BIGINT REFERENCES workers(user_id),
+                    ADD COLUMN IF NOT EXISTS queue_offer_worker_id BIGINT REFERENCES workers(user_id),
                     ADD COLUMN IF NOT EXISTS assigned_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ,
                     ADD COLUMN IF NOT EXISTS route_started_at TIMESTAMPTZ,
@@ -39,6 +40,9 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS before_photo_id VARCHAR(255),
                     ADD COLUMN IF NOT EXISTS after_photo_id VARCHAR(255),
                     ADD COLUMN IF NOT EXISTS worker_comment TEXT
+                    ,
+                    ADD COLUMN IF NOT EXISTS queued_offer BOOLEAN NOT NULL DEFAULT FALSE,
+                    ADD COLUMN IF NOT EXISTS queue_prompted_at TIMESTAMPTZ
                 """
             )
         )

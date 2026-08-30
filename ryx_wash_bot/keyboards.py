@@ -95,6 +95,45 @@ def available_workers_keyboard(order_id: int, workers: list):
     return builder.as_markup()
 
 
+def no_available_workers_keyboard(order_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Navbatga qo'yish",
+        callback_data=f"queue_order:{order_id}",
+    )
+    builder.button(
+        text="Band ishchiga biriktirish",
+        callback_data=f"busy_workers:{order_id}",
+    )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def busy_workers_keyboard(order_id: int, workers: list):
+    builder = InlineKeyboardBuilder()
+    for worker in workers:
+        builder.button(
+            text=f"{worker.name} ({worker.share_percent:g}%)",
+            callback_data=f"queue_worker:{order_id}:{worker.user_id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def queue_offer_decision_keyboard(order_id: int, worker_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="Ha",
+        callback_data=f"queue_offer:{order_id}:{worker_id}:yes",
+    )
+    builder.button(
+        text="Yo'q",
+        callback_data=f"queue_offer:{order_id}:{worker_id}:no",
+    )
+    builder.adjust(2)
+    return builder.as_markup()
+
+
 def worker_order_decision_keyboard(order_id: int):
     builder = InlineKeyboardBuilder()
     builder.button(text="Qabul qilaman", callback_data=f"worker_accept:{order_id}")

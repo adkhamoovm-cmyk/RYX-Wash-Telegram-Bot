@@ -9,22 +9,29 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .catalog import format_price
 from .config import Settings
 from .keyboards import (
     available_workers_keyboard,
+    busy_workers_keyboard,
     cancellation_reasons_keyboard,
     cancel_only_keyboard,
     director_menu_keyboard,
+    no_available_workers_keyboard,
+    queue_offer_decision_keyboard,
     worker_menu_keyboard,
     worker_order_decision_keyboard,
     worker_status_keyboard,
 )
 from .models import Cancellation, Order, User, Worker
-from .scheduler import remove_offer_timeout, schedule_offer_timeout
+from .scheduler import (
+    configure_worker_available_handler,
+    remove_offer_timeout,
+    schedule_offer_timeout,
+)
 from .states import (
     CancellationStates,
     WorkerCompletionStates,
@@ -33,6 +40,13 @@ from .states import (
 
 logger = logging.getLogger(__name__)
 TASHKENT = ZoneInfo("Asia/Tashkent")
+ACTIVE_ACCEPTED_STATUSES = {
+    "ishchi_qabul_qildi",
+    "yo'lda",
+    "yetib_keldi",
+    "yuvish_boshlandi",
+    "yakunlanmoqda",
+}
 
 
 def _safe(value: object) -> str:
@@ -69,6 +83,122 @@ def _register_user_routes(
 
     async def get_worker(session: AsyncSession, user_id: int) -> Worker | None:
         return await session.scalar(select(Worker).where(Worker.user_id == user_id))
+
+    def worker_offer_text(order: Order) -> str:
+        return (
+            f"<b>Yangi buyurtma #{order.id}</b>\n\n"
+            f"<b>Mashina:</b> {_safe(order.car_model)}\n"
+            f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n\n"
+            "Buyurtmani qabul qilasizmi?"
+        )
+
+    async def activate_queued_order(
+        order_id: int,
+        worker_id: int,
+        bot,
+    ) -> bool:
+        async with sessions() as session:
+            order = await session.get(Order, order_id)
+            worker = await session.get(Worker, worker_id)
+            if (
+                not order
+                or not worker
+                or order.status != "navbatda"
+                or worker.status != "bo'sh"
+                or order.worker_id not in {None, worker_id}
+            ):
+                return False
+            assigned_at = now_tashkent()
+            order.worker_id = worker_id
+            order.queue_offer_worker_id = None
+            order.queue_prompted_at = None
+            order.status = "ishchiga_yuborildi"
+            order.queued_offer = True
+            order.assigned_at = assigned_at
+            worker.status = "band"
+            customer = await session.get(User, order.customer_id)
+            text = (
+                f"<b>Navbatdagi buyurtma #{order.id}</b>\n\n"
+                f"<b>Mijoz:</b> {_safe(customer.name if customer else '—')}\n"
+                f"<b>Mashina:</b> {_safe(order.car_model)}\n"
+                f"<b>Davlat raqami:</b> {_safe(order.plate_number)}\n"
+                f"<b>To'lov:</b> {_safe(order.payment_method)}\n"
+                f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                f"<b>Izoh:</b> {_safe(order.comment or '—')}\n\n"
+                "Buyurtmani qabul qilasizmi?"
+            )
+            latitude = float(order.latitude)
+            longitude = float(order.longitude)
+            await session.commit()
+        schedule_offer_timeout(scheduler, order_id, assigned_at)
+        await bot.send_message(
+            worker_id,
+            text,
+            reply_markup=worker_order_decision_keyboard(order_id),
+        )
+        await bot.send_location(
+            worker_id,
+            latitude=latitude,
+            longitude=longitude,
+        )
+        return True
+
+    async def offer_next_queued_order(worker_id: int, bot) -> None:
+        async with sessions() as session:
+            worker = await session.get(Worker, worker_id)
+            if not worker or worker.status != "bo'sh":
+                return
+            assigned_order = await session.scalar(
+                select(Order)
+                .where(
+                    Order.status == "navbatda",
+                    Order.worker_id == worker_id,
+                )
+                .order_by(Order.created_at, Order.id)
+                .limit(1)
+            )
+            if assigned_order:
+                assigned_order_id = assigned_order.id
+            else:
+                assigned_order_id = None
+
+        if assigned_order_id is not None:
+            await activate_queued_order(assigned_order_id, worker_id, bot)
+            return
+
+        async with sessions() as session:
+            worker = await session.get(Worker, worker_id)
+            if not worker or worker.status != "bo'sh":
+                return
+            queued_order = await session.scalar(
+                select(Order)
+                .where(
+                    Order.status == "navbatda",
+                    Order.worker_id.is_(None),
+                    Order.queue_offer_worker_id.is_(None),
+                )
+                .order_by(Order.created_at, Order.id)
+                .limit(1)
+            )
+            if not queued_order:
+                return
+            customer = await session.get(User, queued_order.customer_id)
+            queued_order.queue_offer_worker_id = worker_id
+            queued_order.queue_prompted_at = now_tashkent()
+            order_id = queued_order.id
+            customer_name = customer.name if customer else "—"
+            car_model = queued_order.car_model
+            worker_name = worker.name
+            await session.commit()
+
+        await bot.send_message(
+            settings.director_id,
+            f"{_safe(worker_name)} endi bo'sh, navbatdagi buyurtmani "
+            f"({_safe(customer_name)}, {_safe(car_model)}) beramizmi?",
+            reply_markup=queue_offer_decision_keyboard(order_id, worker_id),
+        )
+
+    configure_worker_available_handler(offer_next_queued_order)
 
     @router.message(F.text == "Ishchi qo'shish")
     async def start_worker_registration(
@@ -235,7 +365,11 @@ def _register_user_routes(
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
             order = await session.get(Order, order_id)
-            if not order or order.status != "yangi" or order.worker_id is not None:
+            if (
+                not order
+                or order.status not in {"yangi", "navbatda"}
+                or order.worker_id is not None
+            ):
                 await callback.answer(
                     "Buyurtma hozir ishchiga yuborish uchun tayyor emas.",
                     show_alert=True,
@@ -251,8 +385,11 @@ def _register_user_routes(
                 ).all()
             )
         if not workers:
-            await callback.answer(
-                "Hozircha bo'sh ishchilar yo'q.", show_alert=True
+            await callback.answer()
+            await callback.message.answer(
+                "Hozir barcha ishchilar band yoki smenada emas. "
+                "Buyurtma bilan nima qilamiz?",
+                reply_markup=no_available_workers_keyboard(order_id),
             )
             return
         await callback.answer()
@@ -260,6 +397,177 @@ def _register_user_routes(
             f"Buyurtma #{order_id} uchun bo'sh ishchini tanlang:",
             reply_markup=available_workers_keyboard(order_id, workers),
         )
+
+    @router.callback_query(F.data.startswith("queue_order:"))
+    async def queue_order(callback: CallbackQuery) -> None:
+        order_id = int(callback.data.split(":", 1)[1])
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                return
+            order = await session.get(Order, order_id)
+            if (
+                not order
+                or order.status not in {"yangi", "navbatda"}
+                or order.worker_id is not None
+            ):
+                await callback.answer(
+                    "Bu buyurtmani navbatga qo'yib bo'lmaydi.", show_alert=True
+                )
+                return
+            order.status = "navbatda"
+            order.queued_offer = False
+            order.queue_offer_worker_id = None
+            order.queue_prompted_at = None
+            await session.commit()
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("Buyurtma navbatga qo'yildi.")
+        await callback.message.answer(f"Buyurtma #{order_id} navbatga qo'yildi.")
+
+    @router.callback_query(F.data.startswith("busy_workers:"))
+    async def show_busy_workers(callback: CallbackQuery) -> None:
+        order_id = int(callback.data.split(":", 1)[1])
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                return
+            order = await session.get(Order, order_id)
+            if (
+                not order
+                or order.status not in {"yangi", "navbatda"}
+                or order.worker_id is not None
+            ):
+                await callback.answer(
+                    "Bu buyurtmani band ishchiga biriktirib bo'lmaydi.",
+                    show_alert=True,
+                )
+                return
+            workers = list(
+                (
+                    await session.scalars(
+                        select(Worker)
+                        .join(Order, Order.worker_id == Worker.user_id)
+                        .where(Worker.status == "band")
+                        .where(Order.status.in_(ACTIVE_ACCEPTED_STATUSES))
+                        .order_by(Worker.name)
+                    )
+                ).all()
+            )
+        if not workers:
+            await callback.answer("Band ishchilar topilmadi.", show_alert=True)
+            return
+        await callback.answer()
+        await callback.message.answer(
+            f"Buyurtma #{order_id} uchun band ishchini tanlang:",
+            reply_markup=busy_workers_keyboard(order_id, workers),
+        )
+
+    @router.callback_query(F.data.startswith("queue_worker:"))
+    async def assign_to_busy_worker(callback: CallbackQuery) -> None:
+        _, order_id_raw, worker_id_raw = callback.data.split(":")
+        order_id, worker_id = int(order_id_raw), int(worker_id_raw)
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                return
+            order = await session.get(Order, order_id)
+            worker = await session.get(Worker, worker_id)
+            if (
+                not order
+                or not worker
+                or order.status not in {"yangi", "navbatda"}
+                or order.worker_id is not None
+                or worker.status != "band"
+            ):
+                await callback.answer(
+                    "Buyurtma yoki ishchi holati o'zgargan.", show_alert=True
+                )
+                return
+            has_active_order = await session.scalar(
+                select(func.count(Order.id)).where(
+                    Order.worker_id == worker_id,
+                    Order.status.in_(ACTIVE_ACCEPTED_STATUSES),
+                )
+            )
+            if not has_active_order:
+                await callback.answer(
+                    "Bu ishchida qabul qilingan faol buyurtma yo'q.",
+                    show_alert=True,
+                )
+                return
+            order.status = "navbatda"
+            order.worker_id = worker_id
+            order.queued_offer = False
+            order.queue_offer_worker_id = None
+            order.queue_prompted_at = None
+            await session.flush()
+            queue_count = await session.scalar(
+                select(func.count(Order.id)).where(
+                    Order.worker_id == worker_id,
+                    Order.status == "navbatda",
+                )
+            )
+            worker_name = worker.name
+            await session.commit()
+        await callback.bot.send_message(
+            worker_id,
+            f"Sizda navbatda yana {queue_count} ta buyurtma bor.",
+            reply_markup=cancel_only_keyboard(order_id),
+        )
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer()
+        await callback.message.answer(
+            f"Buyurtma #{order_id} {worker_name} uchun navbatga biriktirildi."
+        )
+
+    @router.callback_query(F.data.startswith("queue_offer:"))
+    async def decide_global_queue_offer(callback: CallbackQuery) -> None:
+        _, order_id_raw, worker_id_raw, decision = callback.data.split(":")
+        order_id, worker_id = int(order_id_raw), int(worker_id_raw)
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                return
+            order = await session.get(Order, order_id)
+            worker = await session.get(Worker, worker_id)
+            if (
+                not order
+                or not worker
+                or order.status != "navbatda"
+                or order.worker_id is not None
+                or order.queue_offer_worker_id != worker_id
+            ):
+                await callback.answer(
+                    "Bu navbat taklifi endi amalda emas.", show_alert=True
+                )
+                return
+            if decision == "no":
+                order.queue_offer_worker_id = None
+                order.queue_prompted_at = None
+                await session.commit()
+                await callback.message.edit_reply_markup(reply_markup=None)
+                await callback.answer("Buyurtma navbatda qoldi.")
+                return
+            if decision != "yes":
+                await callback.answer("Noto'g'ri tanlov.", show_alert=True)
+                return
+            if worker.status != "bo'sh":
+                order.queue_offer_worker_id = None
+                order.queue_prompted_at = None
+                await session.commit()
+                await callback.message.edit_reply_markup(reply_markup=None)
+                await callback.answer(
+                    "Ishchi hozir bo'sh emas.", show_alert=True
+                )
+                return
+        activated = await activate_queued_order(order_id, worker_id, callback.bot)
+        if not activated:
+            await callback.answer(
+                "Buyurtmani ishchiga yuborib bo'lmadi.", show_alert=True
+            )
+            return
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.answer("Navbatdagi buyurtma ishchiga yuborildi.")
 
     @router.callback_query(F.data.startswith("assign_worker:"))
     async def assign_order(
@@ -278,7 +586,10 @@ def _register_user_routes(
             if not order or not worker:
                 await callback.answer("Buyurtma yoki ishchi topilmadi.", show_alert=True)
                 return
-            if order.worker_id is not None or order.status != "yangi":
+            if (
+                order.worker_id is not None
+                or order.status not in {"yangi", "navbatda"}
+            ):
                 await callback.answer(
                     "Bu buyurtma allaqachon ishchiga yuborilgan.", show_alert=True
                 )
@@ -286,23 +597,18 @@ def _register_user_routes(
             if worker.status != "bo'sh":
                 await callback.answer("Bu ishchi endi bo'sh emas.", show_alert=True)
                 return
+            was_queued = order.status == "navbatda"
             order.worker_id = worker.user_id
+            order.queue_offer_worker_id = None
+            order.queue_prompted_at = None
             order.assigned_at = now_tashkent()
             order.status = "ishchiga_yuborildi"
+            order.queued_offer = was_queued
             worker.status = "band"
             await session.commit()
             assigned_at = order.assigned_at
             worker_name = worker.name
-            worker_phone = worker.phone
-            customer = await session.get(User, order.customer_id)
-            customer_name = customer.name if customer else "—"
-
-            worker_text = (
-                f"<b>Yangi buyurtma #{order.id}</b>\n\n"
-                f"<b>Mashina:</b> {_safe(order.car_model)}\n"
-                f"<b>Narx:</b> {_safe(format_price(int(order.car_price)))}\n\n"
-                "Buyurtmani qabul qilasizmi?"
-            )
+            worker_text = worker_offer_text(order)
         schedule_offer_timeout(scheduler, order_id, assigned_at)
         await callback.bot.send_message(
             worker_id,
@@ -345,6 +651,7 @@ def _register_user_routes(
                 return
             order.status = "ishchi_qabul_qildi"
             order.accepted_at = now_tashkent()
+            order.queued_offer = False
             customer = await session.get(User, order.customer_id)
             await session.commit()
             customer_name = customer.name if customer else "—"
@@ -399,7 +706,10 @@ def _register_user_routes(
             worker.status = "bo'sh"
             order.worker_id = None
             order.assigned_at = None
-            order.status = "yangi"
+            order.status = "navbatda" if order.queued_offer else "yangi"
+            order.queued_offer = False
+            order.queue_offer_worker_id = None
+            order.queue_prompted_at = None
             worker_name = worker.name
             await session.commit()
         remove_offer_timeout(scheduler, order_id)
@@ -409,6 +719,7 @@ def _register_user_routes(
             f"{_safe(worker_name)} rad etdi (buyurtma #{order_id}).",
         )
         await callback.answer("Buyurtma rad etildi.")
+        await offer_next_queued_order(callback.from_user.id, callback.bot)
 
     async def can_cancel(
         session: AsyncSession,
@@ -466,11 +777,15 @@ def _register_user_routes(
             ):
                 return False
             worker_id = order.worker_id
+            was_waiting_in_queue = order.status == "navbatda"
             if worker_id:
                 worker = await session.get(Worker, worker_id)
-                if worker:
+                if worker and not was_waiting_in_queue:
                     worker.status = "bo'sh"
             order.status = "bekor_qilindi"
+            order.queued_offer = False
+            order.queue_offer_worker_id = None
+            order.queue_prompted_at = None
             session.add(
                 Cancellation(
                     order_id=order.id,
@@ -737,6 +1052,7 @@ def _register_user_routes(
             customer_id,
             "Buyurtmangiz yakunlandi. RYX Wash xizmatidan foydalanganingiz uchun rahmat!",
         )
+        await offer_next_queued_order(message.from_user.id, message.bot)
         await state.clear()
 
     @router.message(Command("worker_id"))
