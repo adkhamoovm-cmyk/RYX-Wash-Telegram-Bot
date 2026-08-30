@@ -1,0 +1,55 @@
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
+
+from .catalog import categories, format_price, models_for_category
+
+
+def contact_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.add(KeyboardButton(text="Telefon raqamimni yuborish", request_contact=True))
+    return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
+
+
+def customer_menu_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.add(KeyboardButton(text="Yangi buyurtma"))
+    return builder.as_markup(resize_keyboard=True)
+
+
+def category_keyboard():
+    builder = InlineKeyboardBuilder()
+    for category in categories():
+        builder.button(text=category, callback_data=f"category:{category}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def model_keyboard(category: str):
+    builder = InlineKeyboardBuilder()
+    for model in models_for_category(category):
+        builder.button(
+            text=f"{model.name} — {format_price(model.price)}",
+            callback_data=f"model:{model.id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def payment_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="Naqd", callback_data="payment:Naqd")
+    builder.button(text="Karta", callback_data="payment:Karta")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def location_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.add(KeyboardButton(text="Lokatsiyamni yuborish", request_location=True))
+    return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
+
+
+def skip_comment_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.add(KeyboardButton(text="O'tkazib yuborish"))
+    return builder.as_markup(resize_keyboard=True, one_time_keyboard=True)
