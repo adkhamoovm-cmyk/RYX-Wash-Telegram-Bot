@@ -170,18 +170,21 @@ def _new_router(
         if not message.from_user:
             return
 
+        telegram_id = message.from_user.id
         async with session_factory() as session:
-            user = await find_user(session, message.from_user.id)
-
-            if user is None:
-                user = User(
-                    telegram_id=message.from_user.id,
-                    rol="direktor" if message.from_user.id == settings.director_id else "mijoz",
-                )
-                session.add(user)
+            # Resolve the role in priority order. The director ID is authoritative,
+            # followed by the workers table, then the users/customer table.
+            if telegram_id == settings.director_id:
+                user = await find_user(session, telegram_id)
+                if user is None:
+                    user = User(
+                        telegram_id=telegram_id,
+                        rol="direktor",
+                    )
+                    session.add(user)
+                elif user.rol != "direktor":
+                    user.rol = "direktor"
                 await session.commit()
-
-            if user.rol == "direktor":
                 await state.clear()
                 await message.answer(
                     "👔 Direktor paneli.",
@@ -189,7 +192,20 @@ def _new_router(
                 )
                 return
 
-            if user.rol == "ishchi":
+            worker = await session.get(Worker, telegram_id)
+            if worker is not None:
+                user = await find_user(session, telegram_id)
+                if user is None:
+                    user = User(
+                        telegram_id=telegram_id,
+                        name=worker.name,
+                        phone=worker.phone,
+                        rol="ishchi",
+                    )
+                    session.add(user)
+                elif user.rol != "ishchi":
+                    user.rol = "ishchi"
+                await session.commit()
                 await state.clear()
                 await message.answer(
                     "👷 Ishchi paneli.",
@@ -197,36 +213,56 @@ def _new_router(
                 )
                 return
 
-            if user.rol != "mijoz":
+            user = await find_user(session, telegram_id)
+            if user is not None:
+                if user.rol == "direktor":
+                    await state.clear()
+                    await message.answer(
+                        "👔 Direktor paneli.",
+                        reply_markup=director_menu_keyboard(),
+                    )
+                    return
+
+                if user.rol == "ishchi":
+                    await state.clear()
+                    await message.answer(
+                        "👷 Ishchi paneli.",
+                        reply_markup=worker_menu_keyboard(),
+                    )
+                    return
+
+                if user.rol != "mijoz":
+                    await state.clear()
+                    await message.answer(
+                        "❌ Sizning rolingiz bazada mijoz emas. "
+                        "Direktor va ishchi funksiyalari keyingi bosqichda qo'shiladi."
+                    )
+                    return
+
+                # An existing customer record is enough to bypass registration.
                 await state.clear()
                 await message.answer(
-                    "❌ Sizning rolingiz bazada mijoz emas. "
-                    "Direktor va ishchi funksiyalari keyingi bosqichda qo'shiladi."
+                    "👋 RYX Wash xizmatiga xush kelibsiz.",
+                    reply_markup=customer_menu_keyboard(),
                 )
                 return
 
-            if not user.name:
-                await state.set_state(RegistrationStates.waiting_name)
-                await message.answer(
-                    "👋 RYX Wash xizmatiga xush kelibsiz.\n\n"
-                    "📝 Ro'yxatdan o'tish uchun ism-familyangizni yozing:",
-                    reply_markup=ReplyKeyboardRemove(),
-                )
-                return
+            # No record exists in any role table: create a customer record and
+            # begin the first-time registration flow.
+            user = User(
+                telegram_id=telegram_id,
+                rol="mijoz",
+            )
+            session.add(user)
+            await session.commit()
 
-            if not user.phone:
-                await state.set_state(RegistrationStates.waiting_phone)
-                await message.answer(
-                    "📞 Telefon raqamingizni Telegram tugmasi orqali yuboring:",
-                    reply_markup=contact_keyboard(),
-                )
-                return
-
-        await state.clear()
-        await message.answer(
-            "👋 RYX Wash xizmatiga xush kelibsiz.",
-            reply_markup=customer_menu_keyboard(),
-        )
+            await state.set_state(RegistrationStates.waiting_name)
+            await message.answer(
+                "👋 RYX Wash xizmatiga xush kelibsiz.\n\n"
+                "📝 Ro'yxatdan o'tish uchun ism-familyangizni yozing:",
+                reply_markup=ReplyKeyboardRemove(),
+            )
+            return
 
     @router.message(RegistrationStates.waiting_name, F.text)
     async def receive_name(message: Message, state: FSMContext) -> None:

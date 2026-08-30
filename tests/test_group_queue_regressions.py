@@ -274,6 +274,77 @@ def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
     run(scenario())
 
 
+def test_start_routes_existing_customer_worker_and_director_to_their_menus():
+    async def scenario():
+        engine, sessions, settings, scheduler, router = await make_context()
+        try:
+            async with sessions() as session:
+                session.add_all(
+                    [
+                        User(
+                            telegram_id=CUSTOMER_ID,
+                            name="Mijoz",
+                            phone="+998901234567",
+                            rol="mijoz",
+                        ),
+                        # Deliberately keep the users role stale: the workers
+                        # table must take precedence for /start.
+                        User(
+                            telegram_id=WORKER_ONE_ID,
+                            name="Ishchi",
+                            phone="+998901234568",
+                            rol="mijoz",
+                        ),
+                        User(
+                            telegram_id=DIRECTOR_ID,
+                            name="Direktor",
+                            phone="+998900000000",
+                            rol="direktor",
+                        ),
+                        Worker(
+                            user_id=WORKER_ONE_ID,
+                            name="Ishchi",
+                            phone="+998901234568",
+                            share_percent=Decimal("30"),
+                            status="smenada_emas",
+                        ),
+                    ]
+                )
+                await session.commit()
+
+            start = handler(router, "message", "start")
+            bot = RecordingBot()
+
+            customer_message = RecordingMessage(bot, CUSTOMER_ID, "/start")
+            customer_state = RecordingState()
+            await start(customer_message, customer_state)
+            assert customer_message.answer_calls[0][0] == (
+                "👋 RYX Wash xizmatiga xush kelibsiz."
+            )
+            assert customer_state.cleared is True
+
+            worker_message = RecordingMessage(bot, WORKER_ONE_ID, "/start")
+            worker_state = RecordingState()
+            await start(worker_message, worker_state)
+            assert worker_message.answer_calls[0][0] == "👷 Ishchi paneli."
+            assert worker_state.cleared is True
+
+            director_message = RecordingMessage(bot, DIRECTOR_ID, "/start")
+            director_state = RecordingState()
+            await start(director_message, director_state)
+            assert director_message.answer_calls[0][0] == "👔 Direktor paneli."
+            assert director_state.cleared is True
+
+            async with sessions() as session:
+                worker_user = await session.get(User, WORKER_ONE_ID)
+                assert worker_user is not None
+                assert worker_user.rol == "ishchi"
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
 def test_customer_location_submission_sends_group_summary_and_location():
     async def scenario():
         engine, sessions, _settings, _scheduler, router = await make_context()
