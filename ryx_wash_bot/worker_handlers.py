@@ -876,8 +876,20 @@ def _register_user_routes(
                 await message.answer("⚠️ Sizning ishchi profilingiz faol emas.")
                 return
             if worker.status == "band":
-                await message.answer("⚠️ Siz hozir buyurtma bilan bandsiz.")
-                return
+                active_order = await session.scalar(
+                    select(Order.id)
+                    .where(
+                        Order.worker_id == worker.user_id,
+                        Order.status.not_in({"yakunlandi", "bekor_qilindi"}),
+                    )
+                    .limit(1)
+                )
+                if active_order is not None:
+                    await message.answer("⚠️ Siz hozir buyurtma bilan bandsiz.")
+                    return
+                # A deleted or otherwise closed order must not leave the
+                # worker permanently blocked in the busy state.
+                worker.status = "bo'sh"
             worker.status = "bo'sh"
             worker.shift_started_at = now_tashkent()
             worker.shift_ended_at = None

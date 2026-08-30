@@ -447,6 +447,30 @@ def test_director_manual_order_skips_color_and_photo():
     run(scenario())
 
 
+def test_start_shift_recovers_stale_busy_status_without_active_order():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            async with sessions() as session:
+                worker = await session.get(Worker, WORKER_ONE_ID)
+                worker.status = "band"
+                await session.commit()
+
+            bot = RecordingBot()
+            message = RecordingMessage(bot, WORKER_ONE_ID, "🟢 Ishga keldim")
+            await handler(router, "message", "start_shift")(message)
+
+            assert "Smena boshlandi" in str(message.answer_calls[0][0])
+            async with sessions() as session:
+                worker = await session.get(Worker, WORKER_ONE_ID)
+                assert worker.status == "bo'sh"
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
 def test_main_menu_text_clears_any_active_fsm_state_before_handler():
     async def scenario():
         state = RecordingState({"pending_input": "CRM search"})
