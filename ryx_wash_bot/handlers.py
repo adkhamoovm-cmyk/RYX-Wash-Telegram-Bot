@@ -35,6 +35,8 @@ from .keyboards import (
     crm_menu_keyboard,
     customer_menu_keyboard,
     director_menu_keyboard,
+    expense_delete_confirm_keyboard,
+    expense_items_keyboard,
     group_mode_keyboard,
     location_keyboard,
     manual_category_keyboard,
@@ -73,7 +75,6 @@ def _safe(value: object) -> str:
     return html.escape(str(value))
 
 
-UZBEK_PHONE_RE = re.compile(r"^\+998\d{9}$")
 TASHKENT = ZoneInfo("Asia/Tashkent")
 CUSTOM_RANGE_RE = re.compile(
     r"^\s*(\d{2}\.\d{2}\.\d{4})\s*[-–—]\s*(\d{2}\.\d{2}\.\d{4})\s*$"
@@ -105,6 +106,8 @@ MAIN_MENU_TEXTS = frozenset(
         "Narxlarni boshqarish",
         "📉 Xarajat qo'shish",
         "Xarajat qo'shish",
+        "🧾 Xarajatlarni boshqarish",
+        "Xarajatlarni boshqarish",
         "📊 Hisobot",
         "Hisobot",
         "Statistika",
@@ -127,6 +130,15 @@ class MainMenuStateResetMiddleware(BaseMiddleware):
             if state is not None:
                 await state.clear()
         return await handler(event, data)
+
+
+def normalize_uzbek_phone(value: str) -> str | None:
+    digits = re.sub(r"\D", "", value)
+    if len(digits) == 9:
+        return f"+998{digits}"
+    if len(digits) == 12 and digits.startswith("998"):
+        return f"+{digits}"
+    return None
 
 
 def _parse_money(value: str, *, whole_only: bool = False) -> Decimal | None:
@@ -976,6 +988,171 @@ def _new_router(
             reply_markup=director_menu_keyboard(),
         )
 
+    @router.message(
+        F.text.in_({"🧾 Xarajatlarni boshqarish", "Xarajatlarni boshqarish"})
+    )
+    async def manage_expenses(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await message.answer("❌ Bu bo'lim faqat direktor uchun.")
+            return
+        await state.clear()
+        async with session_factory() as session:
+            expenses = list(
+                (
+                    await session.scalars(
+                        select(Expense)
+                        .order_by(Expense.spent_at.desc(), Expense.id.desc())
+                        .limit(20)
+                    )
+                ).all()
+            )
+        if not expenses:
+            await message.answer(
+                "📭 Hali xarajatlar kiritilmagan.",
+                reply_markup=director_menu_keyboard(),
+            )
+            return
+        lines = ["<b>🧾 Xarajatlarni boshqarish</b>", ""]
+        for expense in expenses:
+            date_text = expense.spent_at.astimezone(TASHKENT).strftime("%d.%m.%Y")
+            lines.append(
+                f"• {_safe(date_text)} | "
+                f"{_safe(format_price(int(expense.amount)))} | "
+                f"{_safe(expense.description)}"
+            )
+        await message.answer(
+            "\n".join(lines),
+            reply_markup=expense_items_keyboard(expenses),
+        )
+
+    @router.callback_query(F.data.startswith("expense_edit:"))
+    async def start_expense_edit(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        try:
+            expense_id = int(callback.data.split(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer("Xarajat identifikatori noto'g'ri.", show_alert=True)
+            return
+        async with session_factory() as session:
+            expense = await session.get(Expense, expense_id)
+        if expense is None:
+            await callback.answer("Xarajat topilmadi.", show_alert=True)
+            return
+        await state.clear()
+        await state.update_data(expense_id=expense_id)
+        await state.set_state(ExpenseStates.waiting_edit_amount)
+        await callback.answer()
+        await callback.message.answer(
+            f"✏️ Joriy summa: <b>{_safe(format_price(int(expense.amount)))}</b>\n"
+            "Yangi summani kiriting:"
+        )
+
+    @router.message(ExpenseStates.waiting_edit_amount, F.text)
+    async def receive_expense_edit_amount(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("❌ Bu amal faqat direktor uchun.")
+            return
+        amount = _parse_money(message.text, whole_only=True)
+        if amount is None:
+            await message.answer("❌ Musbat, butun summa kiriting.")
+            return
+        await state.update_data(expense_amount=str(amount))
+        await state.set_state(ExpenseStates.waiting_edit_description)
+        await message.answer("📝 Yangi tavsifni kiriting:")
+
+    @router.message(ExpenseStates.waiting_edit_description, F.text)
+    async def receive_expense_edit_description(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("❌ Bu amal faqat direktor uchun.")
+            return
+        description = " ".join(message.text.split())
+        if not description or len(description) > 500:
+            await message.answer("❌ Tavsif 1–500 belgi bo'lishi kerak.")
+            return
+        data = await state.get_data()
+        expense_id = data.get("expense_id")
+        if not isinstance(expense_id, int):
+            await state.clear()
+            await message.answer("❌ Xarajat ma'lumoti topilmadi.")
+            return
+        async with session_factory() as session:
+            expense = await session.get(Expense, expense_id)
+            if expense is None:
+                await state.clear()
+                await message.answer("❌ Xarajat topilmadi.")
+                return
+            expense.amount = Decimal(data["expense_amount"])
+            expense.description = description
+            await session.commit()
+        await state.clear()
+        await message.answer(
+            f"✅ Xarajat yangilandi: "
+            f"{_safe(format_price(int(Decimal(data['expense_amount']))))}\n"
+            f"Tavsif: {_safe(description)}",
+            reply_markup=director_menu_keyboard(),
+        )
+
+    @router.callback_query(F.data.startswith("expense_delete:"))
+    async def ask_delete_expense(callback: CallbackQuery) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        try:
+            expense_id = int(callback.data.split(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer("Xarajat identifikatori noto'g'ri.", show_alert=True)
+            return
+        async with session_factory() as session:
+            expense = await session.get(Expense, expense_id)
+        if expense is None:
+            await callback.answer("Xarajat topilmadi.", show_alert=True)
+            return
+        await callback.answer()
+        await callback.message.answer(
+            f"🗑️ {_safe(format_price(int(expense.amount)))} — "
+            f"{_safe(expense.description)}\n"
+            "Ushbu xarajatni o‘chirishni tasdiqlaysizmi?",
+            reply_markup=expense_delete_confirm_keyboard(expense_id),
+        )
+
+    @router.callback_query(F.data.startswith("expense_delete_confirm:"))
+    async def delete_expense(callback: CallbackQuery) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        try:
+            expense_id = int(callback.data.split(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer("Xarajat identifikatori noto'g'ri.", show_alert=True)
+            return
+        async with session_factory() as session:
+            expense = await session.get(Expense, expense_id)
+            if expense is None:
+                await callback.answer("Xarajat topilmadi.", show_alert=True)
+                return
+            description = expense.description
+            await session.delete(expense)
+            await session.commit()
+        await callback.answer("✅ Xarajat o'chirildi.")
+        await callback.message.answer(
+            f"✅ Xarajat o‘chirildi: {_safe(description)}",
+            reply_markup=director_menu_keyboard(),
+        )
+
+    @router.callback_query(F.data == "expense_delete_cancel")
+    async def cancel_delete_expense(callback: CallbackQuery) -> None:
+        await callback.answer("O‘chirish bekor qilindi.")
+
     async def ask_report_worker(message: Message, state: FSMContext) -> None:
         async with session_factory() as session:
             workers = list(
@@ -1112,16 +1289,18 @@ def _new_router(
         await state.update_data(customer_name=name)
         await state.set_state(ManualOrderStates.waiting_customer_phone)
         await message.answer(
-            "📞 Mijoz telefon raqamini +998XXXXXXXXX formatida kiriting:"
+            "📞 Mijoz telefonini kiriting:\n"
+            "Masalan: <code>901234567</code> yoki <code>998901234567</code>",
+            parse_mode=ParseMode.HTML,
         )
 
     @router.message(ManualOrderStates.waiting_customer_phone, F.text)
     async def manual_customer_phone(message: Message, state: FSMContext) -> None:
-        phone = re.sub(r"[\s()-]", "", message.text)
-        if not UZBEK_PHONE_RE.fullmatch(phone):
+        phone = normalize_uzbek_phone(message.text)
+        if phone is None:
             await message.answer(
-                "❌ Telefon raqami +998 bilan boshlanib, jami 12 raqamdan iborat "
-                "bo'lishi kerak. Masalan: +998901234567"
+                "❌ Telefon raqamini 9 raqamli ko‘rinishda "
+                "(901234567) yoki 998 kodi bilan (998901234567) kiriting."
             )
             return
         data = await state.get_data()

@@ -16,6 +16,8 @@ class PriceManagementStates(StatesGroup):
 class ExpenseStates(StatesGroup):
     waiting_amount = State()
     waiting_description = State()
+    waiting_edit_amount = State()
+    waiting_edit_description = State()
 
 
 class ReportStates(StatesGroup):

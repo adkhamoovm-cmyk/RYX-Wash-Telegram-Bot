@@ -25,6 +25,7 @@ def director_menu_keyboard() -> ReplyKeyboardMarkup:
     builder.add(KeyboardButton(text="📝 Qo'lda buyurtma qo'shish"))
     builder.add(KeyboardButton(text="🏷️ Narxlarni boshqarish"))
     builder.add(KeyboardButton(text="📉 Xarajat qo'shish"))
+    builder.add(KeyboardButton(text="🧾 Xarajatlarni boshqarish"))
     builder.add(KeyboardButton(text="📊 Hisobot"))
     builder.add(KeyboardButton(text="🗂️ Mijozlar bazasi"))
     builder.adjust(2)
@@ -51,6 +52,40 @@ def price_models_keyboard(models: list, action: str):
             text=label,
             callback_data=f"price_{action}_model:{model.id}",
         )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def expense_items_keyboard(expenses: list):
+    builder = InlineKeyboardBuilder()
+    for expense in expenses:
+        date_text = expense.spent_at.strftime("%d.%m.%Y")
+        label = (
+            f"{date_text} | {format_price(int(expense.amount))} | "
+            f"{expense.description}"
+        )
+        builder.button(
+            text=f"✏️ {label}"[:60],
+            callback_data=f"expense_edit:{expense.id}",
+        )
+        builder.button(
+            text="🗑️",
+            callback_data=f"expense_delete:{expense.id}",
+        )
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def expense_delete_confirm_keyboard(expense_id: int):
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="✅ Ha, o'chirish",
+        callback_data=f"expense_delete_confirm:{expense_id}",
+    )
+    builder.button(
+        text="↩️ Bekor qilish",
+        callback_data="expense_delete_cancel",
+    )
     builder.adjust(1)
     return builder.as_markup()
 

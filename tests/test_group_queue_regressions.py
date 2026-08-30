@@ -17,7 +17,7 @@ from ryx_wash_bot.handlers import (
     send_group_summary,
 )
 from ryx_wash_bot.keyboards import saved_cars_keyboard
-from ryx_wash_bot.models import Base, CustomerCar, Order, User, Worker
+from ryx_wash_bot.models import Base, CustomerCar, Expense, Order, User, Worker
 from ryx_wash_bot.scheduler import configure_timeout_runtime, expire_worker_offer
 from ryx_wash_bot import worker_handlers
 
@@ -496,6 +496,66 @@ def test_crm_search_state_then_worker_menu_starts_worker_registration():
             assert state.states
             assert "Mijoz" not in str(message.answer_calls[0][0])
             assert "Telegram ID" in str(message.answer_calls[0][0])
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_director_can_edit_an_expense_amount_and_description():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            async with sessions() as session:
+                session.add(
+                    User(
+                        telegram_id=DIRECTOR_ID,
+                        name="Direktor",
+                        phone="+998900000000",
+                        rol="direktor",
+                    )
+                )
+                session.add(
+                    Expense(
+                        amount=Decimal("100000"),
+                        description="Eski tavsif",
+                        spent_at=datetime(
+                            2026, 8, 30, 8, 0, tzinfo=timezone.utc
+                        ),
+                        created_by=DIRECTOR_ID,
+                    )
+                )
+                await session.commit()
+                expense_id = await session.scalar(
+                    select(Expense.id).order_by(Expense.id.desc())
+                )
+
+            bot = RecordingBot()
+            state = RecordingState()
+            edit_callback = RecordingCallback(
+                f"expense_edit:{expense_id}",
+                DIRECTOR_ID,
+                bot,
+            )
+            await handler(router, "callback_query", "start_expense_edit")(
+                edit_callback, state
+            )
+
+            await handler(router, "message", "receive_expense_edit_amount")(
+                RecordingMessage(bot, DIRECTOR_ID, "250000"),
+                state,
+            )
+            await handler(router, "message", "receive_expense_edit_description")(
+                RecordingMessage(bot, DIRECTOR_ID, "Yangi tavsif"),
+                state,
+            )
+
+            async with sessions() as session:
+                expense = await session.get(Expense, expense_id)
+                assert expense is not None
+                assert expense.amount == Decimal("250000.00")
+                assert expense.description == "Yangi tavsif"
+            assert state.cleared is True
         finally:
             await engine.dispose()
 
