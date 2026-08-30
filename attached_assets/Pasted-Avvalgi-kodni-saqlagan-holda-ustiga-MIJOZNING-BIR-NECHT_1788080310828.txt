@@ -1,0 +1,25 @@
+Avvalgi kodni saqlagan holda, ustiga MIJOZNING BIR NECHTA MASHINASI va BIR NECHTA MASHINALI BUYURTMA funksiyalarini qo'sh.
+
+1. YANGI "customer_cars" JADVALI:
+   - customer_id, model, davlat_raqami, rang (ixtiyoriy)
+   - Har bir mijozga bir nechta mashina biriktirilishi mumkin
+
+2. MASHINA TANLASH QADAMINI YANGILA (ham mijoz o'zi buyurtma berganda, ham direktor qo'lda kiritganda):
+   - Agar tanlangan mijozning (telefon raqami bo'yicha) customer_cars jadvalida allaqachon mashinalari bo'lsa, bot ikkita variant ko'rsatsin: "Mavjud mashinalardan tanlash" (ro'yxatdan bittasini tanlaydi, model+raqam avtomatik to'ladi) yoki "Yangi mashina qo'shish" (model+davlat raqami qo'lda kiritiladi va customer_cars ga yangi yozuv sifatida saqlanadi)
+   - Agar mijozning hali mashinasi bo'lmasa, to'g'ridan-to'g'ri "Yangi mashina qo'shish" oqimi ishga tushadi
+
+3. BIR NECHTA MASHINALI BUYURTMA (guruh):
+   - Bitta mashina tanlangandan/kiritilgandan keyin, bot "Yana mashina qo'shish" tugmasini ko'rsatsin — bosilsa, yana 2-bandda tavsiflangan mashina tanlash oqimi qaytariladi (xohlagan sonda mashina qo'shish mumkin)
+   - Manzil/lokatsiya va to'lov usuli FAQAT BIR MARTA so'raladi — barcha mashinalarga umumiy
+   - "orders" jadvaliga har bir mashina ALOHIDA qator sifatida yoziladi, lekin barchasi bir xil yangi "order_group_id" (masalan UUID yoki auto-increment guruh raqami) bilan bog'lanadi
+   - Umumiy narx (barcha mashinalar narxi yig'indisi) direktorga yuboriladigan xabarda ko'rsatiladi
+
+4. DIREKTORGA YUBORILADIGAN XABAR (guruh bo'lsa):
+   - Agar buyurtmada bir nechta mashina bo'lsa, direktorga BITTA xabar keladi: mijoz ismi, barcha mashinalar ro'yxati (har biri model+narx bilan qatorma-qator), jami summa
+   - Direktor ikkita variantni tanlaydi: "Barchasini bitta ishchiga berish" (mavjud "bitta ishchida bitta faol buyurtma" qoidasi bo'yicha, ishchi ularni birin-ketin, mavjud navbat mexanizmi orqali bajaradi) yoki "Mashinalarni turli ishchilarga bo'lib berish" (har bir mashina uchun alohida "Ishchilarga yuborish" tugmasi ko'rsatiladi)
+
+5. HISOBOT VA STATISTIKA:
+   - Har bir mashina statistikada ALOHIDA yuvilgan mashina sifatida hisoblansin (alohida daromad, alohida ishchi ulushi)
+   - Mijozning buyurtmalar tarixida bitta sana ostida shu guruhning barcha mashinalari birga ko'rsatilsin
+
+Mavjud bitta-mashinali buyurtma oqimini buzma — agar mijoz faqat bitta mashina tanlab, "Yana mashina qo'shish" ni bosmasa, hammasi avvalgidek oddiy tarzda ishlashda davom etsin.
