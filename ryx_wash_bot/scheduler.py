@@ -74,7 +74,28 @@ async def expire_worker_offer(order_id: int) -> None:
         return
 
     async with _sessions() as session:
-        order = await session.get(Order, order_id)
+        order_snapshot = await session.get(Order, order_id)
+        if order_snapshot and order_snapshot.order_group_id:
+            group_orders = list(
+                (
+                    await session.scalars(
+                        select(Order)
+                        .where(
+                            Order.order_group_id
+                            == order_snapshot.order_group_id
+                        )
+                        .order_by(Order.id)
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            order = next(
+                (item for item in group_orders if item.id == order_id),
+                None,
+            )
+        else:
+            order = await session.get(Order, order_id, with_for_update=True)
+            group_orders = [order] if order else []
         if (
             order is None
             or order.status != "ishchiga_yuborildi"
@@ -82,7 +103,7 @@ async def expire_worker_offer(order_id: int) -> None:
         ):
             return
 
-        worker = await session.get(Worker, order.worker_id)
+        worker = await session.get(Worker, order.worker_id, with_for_update=True)
         worker_id = order.worker_id
         worker_name = worker.name if worker else str(worker_id)
         if worker and worker.status == "band":
@@ -95,17 +116,11 @@ async def expire_worker_offer(order_id: int) -> None:
         order.queue_offer_worker_id = None
         order.queue_prompted_at = None
         if order.group_mode == "single" and order.order_group_id:
-            siblings = list(
-                (
-                    await session.scalars(
-                        select(Order).where(
-                            Order.order_group_id == order.order_group_id,
-                            Order.id != order.id,
-                            Order.status == "navbatda",
-                        )
-                    )
-                ).all()
-            )
+            siblings = [
+                sibling
+                for sibling in group_orders
+                if sibling.id != order.id and sibling.status == "navbatda"
+            ]
             for sibling in siblings:
                 sibling.worker_id = None
                 sibling.queue_offer_worker_id = None

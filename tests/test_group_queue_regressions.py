@@ -105,8 +105,10 @@ class RecordingState:
 class RecordingScheduler:
     def __init__(self) -> None:
         self.jobs: dict[str, dict] = {}
+        self.add_job_calls: list[dict] = []
 
     def add_job(self, callback, **kwargs):
+        self.add_job_calls.append({"callback": callback, **kwargs})
         self.jobs[kwargs["id"]] = {"callback": callback, **kwargs}
 
     def remove_job(self, job_id: str):
@@ -117,8 +119,8 @@ def run(coroutine):
     return asyncio.run(coroutine)
 
 
-async def make_context():
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+async def make_context(database_url: str = "sqlite+aiosqlite:///:memory:"):
+    engine = create_async_engine(database_url)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -510,6 +512,83 @@ def test_split_group_assigns_each_car_to_a_different_worker_independently():
                 WORKER_TWO_ID,
             ]
             assert all(order.status == "ishchiga_yuborildi" for order in orders)
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_parallel_assign_callbacks_only_allow_one_worker_to_claim_order(tmp_path):
+    async def scenario():
+        database_path = tmp_path / "parallel-assignment.db"
+        engine, sessions, _settings, scheduler, router = await make_context(
+            f"sqlite+aiosqlite:///{database_path}"
+        )
+        try:
+            await add_people(sessions, worker_statuses=("bo'sh", "bo'sh"))
+            order_id = (
+                await add_group(
+                    sessions,
+                    group_id="parallel-assignment",
+                    count=1,
+                )
+            )[0]
+            bot = RecordingBot()
+            callbacks = [
+                RecordingCallback(
+                    f"assign_worker:{order_id}:{worker_id}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+                for worker_id in (WORKER_ONE_ID, WORKER_TWO_ID)
+            ]
+            assign = handler(router, "callback_query", "assign_order")
+
+            await asyncio.gather(*(assign(callback) for callback in callbacks))
+
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                workers = list(
+                    (
+                        await session.scalars(
+                            select(Worker)
+                            .where(
+                                Worker.user_id.in_(
+                                    {WORKER_ONE_ID, WORKER_TWO_ID}
+                                )
+                            )
+                            .order_by(Worker.user_id)
+                        )
+                    ).all()
+                )
+
+            assert order is not None
+            assert order.status == "ishchiga_yuborildi"
+            assert order.worker_id in {WORKER_ONE_ID, WORKER_TWO_ID}
+            assert {
+                worker.user_id: worker.status
+                for worker in workers
+            } == {
+                order.worker_id: "band",
+                (
+                    WORKER_TWO_ID
+                    if order.worker_id == WORKER_ONE_ID
+                    else WORKER_ONE_ID
+                ): "bo'sh",
+            }
+            assert sum(
+                call[0] == "send_message"
+                and call[1] in {WORKER_ONE_ID, WORKER_TWO_ID}
+                for call in bot.calls
+            ) == 1
+            assert len(scheduler.jobs) == 1
+            assert len(scheduler.add_job_calls) == 1
+            assert sum(
+                answer == "Bu buyurtma allaqachon ishchiga yuborilgan."
+                and kwargs.get("show_alert") is True
+                for callback in callbacks
+                for answer, kwargs in callback.answers
+            ) == 1
         finally:
             await engine.dispose()
 

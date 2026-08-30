@@ -9,7 +9,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .catalog import format_price
@@ -108,8 +108,29 @@ def _register_user_routes(
         bot,
     ) -> bool:
         async with sessions() as session:
-            order = await session.get(Order, order_id)
-            worker = await session.get(Worker, worker_id)
+            order_snapshot = await session.get(Order, order_id)
+            if order_snapshot and order_snapshot.order_group_id:
+                group_orders = list(
+                    (
+                        await session.scalars(
+                            select(Order)
+                            .where(
+                                Order.order_group_id
+                                == order_snapshot.order_group_id
+                            )
+                            .order_by(Order.id)
+                            .with_for_update()
+                        )
+                    ).all()
+                )
+                order = next(
+                    (item for item in group_orders if item.id == order_id),
+                    None,
+                )
+            else:
+                order = await session.get(Order, order_id, with_for_update=True)
+                group_orders = [order] if order else []
+            worker = await session.get(Worker, worker_id, with_for_update=True)
             if (
                 not order
                 or not worker
@@ -128,19 +149,12 @@ def _register_user_routes(
             worker.status = "band"
             sibling_count = 0
             if order.order_group_id and order.group_mode == "single":
-                siblings = list(
-                    (
-                        await session.scalars(
-                            select(Order)
-                            .where(
-                                Order.order_group_id == order.order_group_id,
-                                Order.id != order.id,
-                                Order.status.in_({"yangi", "navbatda"}),
-                            )
-                            .order_by(Order.created_at, Order.id)
-                        )
-                    ).all()
-                )
+                siblings = [
+                    sibling
+                    for sibling in group_orders
+                    if sibling.id != order.id
+                    and sibling.status in {"yangi", "navbatda"}
+                ]
                 for sibling in siblings:
                     sibling.status = "navbatda"
                     sibling.worker_id = worker_id
@@ -205,9 +219,6 @@ def _register_user_routes(
             return
 
         async with sessions() as session:
-            worker = await session.get(Worker, worker_id)
-            if not worker or worker.status != "bo'sh":
-                return
             queued_order = await session.scalar(
                 select(Order)
                 .where(
@@ -217,8 +228,12 @@ def _register_user_routes(
                 )
                 .order_by(Order.created_at, Order.id)
                 .limit(1)
+                .with_for_update(skip_locked=True)
             )
             if not queued_order:
+                return
+            worker = await session.get(Worker, worker_id, with_for_update=True)
+            if not worker or worker.status != "bo'sh":
                 return
             customer = await session.get(User, queued_order.customer_id)
             queued_order.queue_offer_worker_id = worker_id
@@ -250,7 +265,8 @@ def _register_user_routes(
                     await session.scalars(
                         select(Order)
                         .where(Order.order_group_id == group_id)
-                        .order_by(Order.created_at, Order.id)
+                        .order_by(Order.id)
+                        .with_for_update()
                     )
                 ).all()
             )
@@ -299,20 +315,30 @@ def _register_user_routes(
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
-            worker = await session.get(Worker, worker_id)
-            lead_order = await session.get(Order, lead_order_id)
-            group_id = lead_order.order_group_id if lead_order else None
+            lead_order_snapshot = await session.get(Order, lead_order_id)
+            group_id = (
+                lead_order_snapshot.order_group_id
+                if lead_order_snapshot
+                else None
+            )
             orders = list(
                 (
                     await session.scalars(
                         select(Order)
                         .where(Order.order_group_id == group_id)
-                        .order_by(Order.created_at, Order.id)
+                        .order_by(Order.id)
+                        .with_for_update()
                     )
                 ).all()
             )
+            lead_order = next(
+                (order for order in orders if order.id == lead_order_id),
+                None,
+            )
+            worker = await session.get(Worker, worker_id, with_for_update=True)
             if (
                 not worker
+                or not lead_order
                 or not group_id
                 or worker.status not in {"bo'sh", "band"}
                 or not orders
@@ -367,7 +393,8 @@ def _register_user_routes(
                     await session.scalars(
                         select(Order)
                         .where(Order.order_group_id == group_id)
-                        .order_by(Order.created_at, Order.id)
+                        .order_by(Order.id)
+                        .with_for_update()
                     )
                 ).all()
             )
@@ -563,7 +590,7 @@ def _register_user_routes(
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
-            order = await session.get(Order, order_id)
+            order = await session.get(Order, order_id, with_for_update=True)
             if (
                 not order
                 or order.status not in {"yangi", "navbatda"}
@@ -604,7 +631,7 @@ def _register_user_routes(
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
-            order = await session.get(Order, order_id)
+            order = await session.get(Order, order_id, with_for_update=True)
             if (
                 not order
                 or order.status not in {"yangi", "navbatda"}
@@ -669,8 +696,8 @@ def _register_user_routes(
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
-            order = await session.get(Order, order_id)
-            worker = await session.get(Worker, worker_id)
+            order = await session.get(Order, order_id, with_for_update=True)
+            worker = await session.get(Worker, worker_id, with_for_update=True)
             if (
                 not order
                 or not worker
@@ -727,8 +754,8 @@ def _register_user_routes(
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
-            order = await session.get(Order, order_id)
-            worker = await session.get(Worker, worker_id)
+            order = await session.get(Order, order_id, with_for_update=True)
+            worker = await session.get(Worker, worker_id, with_for_update=True)
             if (
                 not order
                 or not worker
@@ -780,32 +807,71 @@ def _register_user_routes(
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
-            order = await session.get(Order, order_id)
-            worker = await session.get(Worker, worker_id)
-            if not order or not worker:
-                await callback.answer("Buyurtma yoki ishchi topilmadi.", show_alert=True)
-                return
-            if (
-                order.worker_id is not None
-                or order.status not in {"yangi", "navbatda"}
-            ):
+            # End the authorization read transaction before the compare-and-set
+            # below. This also lets the SQLite regression test use independent
+            # writer transactions like PostgreSQL production does.
+            await session.commit()
+            assigned_at = now_tashkent()
+            order_claim = await session.execute(
+                update(Order)
+                .where(
+                    Order.id == order_id,
+                    Order.worker_id.is_(None),
+                    Order.status.in_({"yangi", "navbatda"}),
+                )
+                .values(
+                    worker_id=worker_id,
+                    queue_offer_worker_id=None,
+                    queue_prompted_at=None,
+                    assigned_at=assigned_at,
+                    status="ishchiga_yuborildi",
+                    queued_offer=case(
+                        (Order.status == "navbatda", True),
+                        else_=False,
+                    ),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if order_claim.rowcount != 1:
+                await session.rollback()
+                order = await session.get(Order, order_id)
+                worker = await session.get(Worker, worker_id)
+                if not order or not worker:
+                    await callback.answer(
+                        "Buyurtma yoki ishchi topilmadi.",
+                        show_alert=True,
+                    )
+                    return
                 await callback.answer(
-                    "Bu buyurtma allaqachon ishchiga yuborilgan.", show_alert=True
+                    "Bu buyurtma allaqachon ishchiga yuborilgan.",
+                    show_alert=True,
                 )
                 return
-            if worker.status != "bo'sh":
+            worker_claim = await session.execute(
+                update(Worker)
+                .where(
+                    Worker.user_id == worker_id,
+                    Worker.status == "bo'sh",
+                )
+                .values(status="band")
+                .execution_options(synchronize_session=False)
+            )
+            if worker_claim.rowcount != 1:
+                await session.rollback()
+                worker = await session.get(Worker, worker_id)
+                if not worker:
+                    await callback.answer(
+                        "Buyurtma yoki ishchi topilmadi.",
+                        show_alert=True,
+                    )
+                    return
                 await callback.answer("Bu ishchi endi bo'sh emas.", show_alert=True)
                 return
-            was_queued = order.status == "navbatda"
-            order.worker_id = worker.user_id
-            order.queue_offer_worker_id = None
-            order.queue_prompted_at = None
-            order.assigned_at = now_tashkent()
-            order.status = "ishchiga_yuborildi"
-            order.queued_offer = was_queued
-            worker.status = "band"
+            order = await session.get(Order, order_id)
+            worker = await session.get(Worker, worker_id)
             await session.commit()
-            assigned_at = order.assigned_at
+            if order is None or worker is None:
+                raise RuntimeError("Claimed assignment rows could not be reloaded")
             worker_name = worker.name
             worker_text = worker_offer_text(order)
         schedule_offer_timeout(scheduler, order_id, assigned_at)
@@ -825,8 +891,8 @@ def _register_user_routes(
     async def worker_order_and_worker(
         session: AsyncSession, order_id: int, worker_id: int
     ) -> tuple[Order | None, Worker | None]:
-        order = await session.get(Order, order_id)
-        worker = await session.get(Worker, worker_id)
+        order = await session.get(Order, order_id, with_for_update=True)
+        worker = await session.get(Worker, worker_id, with_for_update=True)
         if not order or not worker or order.worker_id != worker_id:
             return None, None
         return order, worker

@@ -2,3 +2,4 @@
 - [Persistent worker-offer timeouts](persistent-offer-timeouts.md) — keep offer expirations in PostgreSQL-backed APScheduler jobs, never process-local sleeps.
 - [Offline customer identity](offline-customer-identity.md) — phone-call customers use negative internal IDs and must never receive Telegram API messages.
 - [Single-worker group queue atomicity](single-worker-group-queue.md) — reject or timeout must release every pending sibling together, preserving group assignment semantics.
+- [Assignment concurrency protocol](assignment-concurrency-protocol.md) — claim orders atomically and lock grouped rows by ID before workers to prevent duplicate assignment and deadlocks.
