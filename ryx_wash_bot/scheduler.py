@@ -50,11 +50,12 @@ def schedule_offer_timeout(
     scheduler: AsyncIOScheduler,
     order_id: int,
     assigned_at: datetime,
+    timeout_minutes: int = OFFER_TIMEOUT_MINUTES,
 ) -> None:
     scheduler.add_job(
         expire_worker_offer,
         trigger="date",
-        run_date=assigned_at + timedelta(minutes=OFFER_TIMEOUT_MINUTES),
+        run_date=assigned_at + timedelta(minutes=timeout_minutes),
         args=[order_id],
         id=offer_timeout_job_id(order_id),
         replace_existing=True,
@@ -130,6 +131,7 @@ async def expire_worker_offer(order_id: int) -> None:
         worker = await session.get(Worker, order.worker_id, with_for_update=True)
         worker_id = order.worker_id
         worker_name = worker.name if worker else str(worker_id)
+        timeout_minutes = order.offer_timeout_minutes or OFFER_TIMEOUT_MINUTES
         if worker and worker.status == "band":
             worker.status = "bo'sh"
 
@@ -153,11 +155,13 @@ async def expire_worker_offer(order_id: int) -> None:
 
     await _bot.send_message(
         worker_id,
-        f"Buyurtma #{order_id} bo'yicha taklif muddati tugadi.",
+        f"Buyurtma #{order_id} bo'yicha {timeout_minutes} daqiqalik "
+        "taklif muddati tugadi.",
     )
     await _bot.send_message(
         _settings.director_id,
-        f"{worker_name} so'rovga javob bermadi (buyurtma #{order_id}).",
+        f"{worker_name} {timeout_minutes} daqiqa ichida javob bermadi "
+        f"(buyurtma #{order_id}).",
     )
     if _worker_available_handler is not None:
         await _worker_available_handler(worker_id, _bot)

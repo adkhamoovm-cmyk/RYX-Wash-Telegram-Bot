@@ -1,7 +1,17 @@
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Numeric, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -134,6 +144,9 @@ class Order(Base):
     )
     group_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="yangi")
+    offer_timeout_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=3, server_default="3"
+    )
     queued_offer: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="false"
     )

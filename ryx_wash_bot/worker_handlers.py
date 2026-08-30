@@ -23,6 +23,7 @@ from .keyboards import (
     group_workers_keyboard,
     new_order_assignment_keyboard,
     no_available_workers_keyboard,
+    offer_timeout_keyboard,
     queue_offer_decision_keyboard,
     worker_cabinet_period_keyboard,
     worker_menu_keyboard,
@@ -53,6 +54,7 @@ ACTIVE_ACCEPTED_STATUSES = {
     "yuvish_boshlandi",
     "yakunlanmoqda",
 }
+OFFER_TIMEOUT_OPTIONS = {3, 5, 10, 15, 30}
 
 
 def _safe(value: object) -> str:
@@ -234,10 +236,12 @@ def _register_user_routes(
             logger.exception("Could not notify customer %s", customer_id)
 
     def worker_offer_text(order: Order) -> str:
+        timeout_minutes = order.offer_timeout_minutes or 3
         return (
             f"<b>🆕 Yangi buyurtma #{order.id}</b>\n\n"
             f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n\n"
+            f"⏱️ Javob berish vaqti: <b>{timeout_minutes} daqiqa</b>\n\n"
             "📥 Buyurtmani qabul qilasizmi?"
         )
 
@@ -300,6 +304,7 @@ def _register_user_routes(
                     sibling.group_mode = "single"
                     sibling_count += 1
             customer = await session.get(User, order.customer_id)
+            timeout_minutes = order.offer_timeout_minutes or 3
             text = (
             f"<b>📋 Navbatdagi buyurtma #{order.id}</b>\n\n"
             f"<b>👤 Mijoz:</b> {_safe(customer.name if customer else '—')}\n"
@@ -308,6 +313,7 @@ def _register_user_routes(
             f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
             f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+            f"⏱️ Javob berish vaqti: <b>{timeout_minutes} daqiqa</b>\n"
             f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
             f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}\n\n"
                 "Buyurtmani qabul qilasizmi?"
@@ -315,7 +321,12 @@ def _register_user_routes(
             latitude = float(order.latitude) if order.latitude is not None else None
             longitude = float(order.longitude) if order.longitude is not None else None
             await session.commit()
-        schedule_offer_timeout(scheduler, order_id, assigned_at)
+        schedule_offer_timeout(
+            scheduler,
+            order_id,
+            assigned_at,
+            timeout_minutes=timeout_minutes,
+        )
         await bot.send_message(
             worker_id,
             text,
@@ -447,9 +458,64 @@ def _register_user_routes(
         )
 
     @router.callback_query(F.data.startswith("group_worker:"))
-    async def assign_group_to_worker(callback: CallbackQuery) -> None:
+    async def choose_group_offer_timeout(callback: CallbackQuery) -> None:
         _, lead_order_id_raw, worker_id_raw = callback.data.split(":")
         lead_order_id, worker_id = int(lead_order_id_raw), int(worker_id_raw)
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+                return
+            lead_order = await session.get(Order, lead_order_id)
+            group_id = lead_order.order_group_id if lead_order else None
+            orders = list(
+                (
+                    await session.scalars(
+                        select(Order)
+                        .where(Order.order_group_id == group_id)
+                        .order_by(Order.id)
+                    )
+                ).all()
+            )
+            worker = await session.get(Worker, worker_id)
+            if (
+                not lead_order
+                or not group_id
+                or not worker
+                or worker.status not in {"bo'sh", "band"}
+                or not orders
+                or any(
+                    order.status not in {"yangi", "navbatda"}
+                    or order.worker_id is not None
+                    for order in orders
+                )
+            ):
+                await callback.answer(
+                    "⚠️ Ishchi yoki guruh holati o'zgargan.",
+                    show_alert=True,
+                )
+                return
+        await callback.answer()
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            "⏱️ Ishchiga javob berish vaqtini tanlang:",
+            reply_markup=offer_timeout_keyboard(
+                "group_worker_timeout", lead_order_id, worker_id
+            ),
+        )
+
+    @router.callback_query(F.data.startswith("group_worker_timeout:"))
+    async def assign_group_to_worker_with_timeout(
+        callback: CallbackQuery,
+    ) -> None:
+        _, lead_order_id_raw, worker_id_raw, timeout_raw = callback.data.split(":")
+        lead_order_id, worker_id, timeout_minutes = (
+            int(lead_order_id_raw),
+            int(worker_id_raw),
+            int(timeout_raw),
+        )
+        if timeout_minutes not in OFFER_TIMEOUT_OPTIONS:
+            await callback.answer("❌ Vaqt tanlovi noto'g'ri.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
@@ -495,6 +561,7 @@ def _register_user_routes(
                 order.status = "navbatda"
                 order.worker_id = worker_id
                 order.group_mode = "single"
+                order.offer_timeout_minutes = timeout_minutes
             lead_order_id = orders[0].id
             worker_was_free = worker.status == "bo'sh"
             worker_name = worker.name
@@ -517,7 +584,8 @@ def _register_user_routes(
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer()
         await callback.message.answer(
-            f"✅ Guruhdagi {len(orders)} ta mashina {worker_name} ga biriktirildi."
+            f"✅ Guruhdagi {len(orders)} ta mashina {worker_name} ga biriktirildi.\n"
+            f"⏱️ Javob berish vaqti: {timeout_minutes} daqiqa."
         )
 
     @router.callback_query(F.data.startswith("group_split:"))
@@ -828,9 +896,59 @@ def _register_user_routes(
         )
 
     @router.callback_query(F.data.startswith("queue_worker:"))
-    async def assign_to_busy_worker(callback: CallbackQuery) -> None:
+    async def choose_queued_offer_timeout(callback: CallbackQuery) -> None:
         _, order_id_raw, worker_id_raw = callback.data.split(":")
         order_id, worker_id = int(order_id_raw), int(worker_id_raw)
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+                return
+            order = await session.get(Order, order_id)
+            worker = await session.get(Worker, worker_id)
+            if (
+                not order
+                or not worker
+                or order.status not in {"yangi", "navbatda"}
+                or order.worker_id is not None
+                or worker.status != "band"
+            ):
+                await callback.answer(
+                    "Buyurtma yoki ishchi holati o'zgargan.",
+                    show_alert=True,
+                )
+                return
+            has_active_order = await session.scalar(
+                select(func.count(Order.id)).where(
+                    Order.worker_id == worker_id,
+                    Order.status.in_(ACTIVE_ACCEPTED_STATUSES),
+                )
+            )
+            if not has_active_order:
+                await callback.answer(
+                    "Bu ishchida qabul qilingan faol buyurtma yo'q.",
+                    show_alert=True,
+                )
+                return
+        await callback.answer()
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            "⏱️ Navbatdagi taklif uchun javob berish vaqtini tanlang:",
+            reply_markup=offer_timeout_keyboard(
+                "queue_worker_timeout", order_id, worker_id
+            ),
+        )
+
+    @router.callback_query(F.data.startswith("queue_worker_timeout:"))
+    async def assign_to_busy_worker(callback: CallbackQuery) -> None:
+        _, order_id_raw, worker_id_raw, timeout_raw = callback.data.split(":")
+        order_id, worker_id, timeout_minutes = (
+            int(order_id_raw),
+            int(worker_id_raw),
+            int(timeout_raw),
+        )
+        if timeout_minutes not in OFFER_TIMEOUT_OPTIONS:
+            await callback.answer("❌ Vaqt tanlovi noto'g'ri.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
@@ -862,6 +980,7 @@ def _register_user_routes(
                 return
             order.status = "navbatda"
             order.worker_id = worker_id
+            order.offer_timeout_minutes = timeout_minutes
             order.queued_offer = False
             order.queue_offer_worker_id = None
             order.queue_prompted_at = None
@@ -882,7 +1001,8 @@ def _register_user_routes(
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer()
         await callback.message.answer(
-            f"Buyurtma #{order_id} {worker_name} uchun navbatga biriktirildi."
+            f"Buyurtma #{order_id} {worker_name} uchun navbatga biriktirildi.\n"
+            f"⏱️ Javob berish vaqti: {timeout_minutes} daqiqa."
         )
 
     @router.callback_query(F.data.startswith("queue_offer:"))
@@ -935,13 +1055,55 @@ def _register_user_routes(
         await callback.answer("✅ Navbatdagi buyurtma ishchiga yuborildi.")
 
     @router.callback_query(F.data.startswith("assign_worker:"))
-    async def assign_order(
+    async def choose_offer_timeout(
         callback: CallbackQuery,
     ) -> None:
         if not callback.from_user:
             return
         _, order_id_raw, worker_id_raw = callback.data.split(":")
         order_id, worker_id = int(order_id_raw), int(worker_id_raw)
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+                return
+            order = await session.get(Order, order_id)
+            worker = await session.get(Worker, worker_id)
+            if (
+                not order
+                or not worker
+                or order.status not in {"yangi", "navbatda"}
+                or order.worker_id is not None
+                or worker.status != "bo'sh"
+            ):
+                await callback.answer(
+                    "⚠️ Buyurtma yoki ishchi holati o'zgargan.",
+                    show_alert=True,
+                )
+                return
+        await callback.answer()
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(
+            "⏱️ Ishchiga javob berish vaqtini tanlang:",
+            reply_markup=offer_timeout_keyboard(
+                "assign_worker_timeout", order_id, worker_id
+            ),
+        )
+
+    @router.callback_query(F.data.startswith("assign_worker_timeout:"))
+    async def assign_order(
+        callback: CallbackQuery,
+    ) -> None:
+        if not callback.from_user:
+            return
+        _, order_id_raw, worker_id_raw, timeout_raw = callback.data.split(":")
+        order_id, worker_id, timeout_minutes = (
+            int(order_id_raw),
+            int(worker_id_raw),
+            int(timeout_raw),
+        )
+        if timeout_minutes not in OFFER_TIMEOUT_OPTIONS:
+            await callback.answer("❌ Vaqt tanlovi noto'g'ri.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
@@ -964,6 +1126,7 @@ def _register_user_routes(
                     queue_prompted_at=None,
                     assigned_at=assigned_at,
                     status="ishchiga_yuborildi",
+                    offer_timeout_minutes=timeout_minutes,
                     queued_offer=case(
                         (Order.status == "navbatda", True),
                         else_=False,
@@ -1013,7 +1176,12 @@ def _register_user_routes(
                 raise RuntimeError("Claimed assignment rows could not be reloaded")
             worker_name = worker.name
             worker_text = worker_offer_text(order)
-        schedule_offer_timeout(scheduler, order_id, assigned_at)
+        schedule_offer_timeout(
+            scheduler,
+            order_id,
+            assigned_at,
+            timeout_minutes=timeout_minutes,
+        )
         await callback.bot.send_message(
             worker_id,
             worker_text,
@@ -1024,7 +1192,8 @@ def _register_user_routes(
             reply_markup=cancel_only_keyboard(order_id)
         )
         await callback.message.answer(
-            f"Buyurtma #{order_id} {worker_name} ishchiga yuborildi."
+            f"Buyurtma #{order_id} {worker_name} ishchiga yuborildi.\n"
+            f"⏱️ Javob berish vaqti: {timeout_minutes} daqiqa."
         )
 
     async def worker_order_and_worker(

@@ -248,9 +248,18 @@ def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
             order_ids = await add_group(sessions)
             bot = RecordingBot()
 
-            await handler(router, "callback_query", "assign_group_to_worker")(
+            await handler(router, "callback_query", "choose_group_offer_timeout")(
                 RecordingCallback(
                     f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+            await handler(
+                router, "callback_query", "assign_group_to_worker_with_timeout"
+            )(
+                RecordingCallback(
+                    f"group_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:10",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -260,6 +269,12 @@ def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
                 ("ishchiga_yuborildi", WORKER_ONE_ID),
                 ("navbatda", WORKER_ONE_ID),
             ]
+            assert all(order.offer_timeout_minutes == 10 for order in orders)
+            timeout_job = scheduler.jobs[f"worker-offer-timeout:{order_ids[0]}"]
+            scheduled_at = timeout_job["run_date"].replace(tzinfo=None)
+            assigned_at = orders[0].assigned_at.replace(tzinfo=None)
+            assert scheduled_at - assigned_at == timedelta(minutes=10)
+            assert any("10 daqiqa" in text for text in bot.messages())
 
             await handler(router, "callback_query", "accept_order")(
                 RecordingCallback(
@@ -724,9 +739,18 @@ def test_single_worker_reject_releases_every_group_sibling():
             await add_people(sessions)
             order_ids = await add_group(sessions)
             bot = RecordingBot()
-            await handler(router, "callback_query", "assign_group_to_worker")(
+            await handler(router, "callback_query", "choose_group_offer_timeout")(
                 RecordingCallback(
                     f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+            await handler(
+                router, "callback_query", "assign_group_to_worker_with_timeout"
+            )(
+                RecordingCallback(
+                    f"group_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:5",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -755,9 +779,18 @@ def test_single_worker_timeout_releases_pending_group_without_stale_binding():
             await add_people(sessions)
             order_ids = await add_group(sessions)
             bot = RecordingBot()
-            await handler(router, "callback_query", "assign_group_to_worker")(
+            await handler(router, "callback_query", "choose_group_offer_timeout")(
                 RecordingCallback(
                     f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+            await handler(
+                router, "callback_query", "assign_group_to_worker_with_timeout"
+            )(
+                RecordingCallback(
+                    f"group_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:15",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -789,9 +822,18 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             await add_people(sessions)
             order_ids = await add_group(sessions)
             bot = RecordingBot()
-            await handler(router, "callback_query", "assign_group_to_worker")(
+            await handler(router, "callback_query", "choose_group_offer_timeout")(
                 RecordingCallback(
                     f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+            await handler(
+                router, "callback_query", "assign_group_to_worker_with_timeout"
+            )(
+                RecordingCallback(
+                    f"group_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:10",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -870,7 +912,10 @@ def test_split_group_assigns_each_car_to_a_different_worker_independently():
                 )
             )
             assign = handler(router, "callback_query", "assign_order")
-            await assign(
+            choose_timeout = handler(
+                router, "callback_query", "choose_offer_timeout"
+            )
+            await choose_timeout(
                 RecordingCallback(
                     f"assign_worker:{order_ids[0]}:{WORKER_ONE_ID}",
                     DIRECTOR_ID,
@@ -879,7 +924,21 @@ def test_split_group_assigns_each_car_to_a_different_worker_independently():
             )
             await assign(
                 RecordingCallback(
+                    f"assign_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:10",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+            await choose_timeout(
+                RecordingCallback(
                     f"assign_worker:{order_ids[1]}:{WORKER_TWO_ID}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+            await assign(
+                RecordingCallback(
+                    f"assign_worker_timeout:{order_ids[1]}:{WORKER_TWO_ID}:15",
                     DIRECTOR_ID,
                     bot,
                 )
@@ -921,9 +980,23 @@ def test_parallel_assign_callbacks_only_allow_one_worker_to_claim_order(tmp_path
                 )
                 for worker_id in (WORKER_ONE_ID, WORKER_TWO_ID)
             ]
+            choose_timeout = handler(
+                router, "callback_query", "choose_offer_timeout"
+            )
             assign = handler(router, "callback_query", "assign_order")
 
-            await asyncio.gather(*(assign(callback) for callback in callbacks))
+            await asyncio.gather(*(choose_timeout(callback) for callback in callbacks))
+            timeout_callbacks = [
+                RecordingCallback(
+                    f"assign_worker_timeout:{order_id}:{worker_id}:10",
+                    DIRECTOR_ID,
+                    bot,
+                )
+                for worker_id in (WORKER_ONE_ID, WORKER_TWO_ID)
+            ]
+            await asyncio.gather(
+                *(assign(callback) for callback in timeout_callbacks)
+            )
 
             async with sessions() as session:
                 order = await session.get(Order, order_id)
@@ -965,7 +1038,7 @@ def test_parallel_assign_callbacks_only_allow_one_worker_to_claim_order(tmp_path
             assert sum(
                 answer == "Bu buyurtma allaqachon ishchiga yuborilgan."
                 and kwargs.get("show_alert") is True
-                for callback in callbacks
+                for callback in timeout_callbacks
                 for answer, kwargs in callback.answers
             ) == 1
         finally:
@@ -1087,9 +1160,16 @@ def test_offline_customer_does_not_stop_worker_acceptance_flow():
                 sessions, customer_id=-1, group_id="offline-group", count=1
             )
             bot = RecordingBot()
-            await handler(router, "callback_query", "assign_order")(
+            await handler(router, "callback_query", "choose_offer_timeout")(
                 RecordingCallback(
                     f"assign_worker:{order_ids[0]}:{WORKER_ONE_ID}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+            await handler(router, "callback_query", "assign_order")(
+                RecordingCallback(
+                    f"assign_worker_timeout:{order_ids[0]}:{WORKER_ONE_ID}:3",
                     DIRECTOR_ID,
                     bot,
                 )
