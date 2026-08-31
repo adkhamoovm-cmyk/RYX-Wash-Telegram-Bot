@@ -1324,10 +1324,22 @@ def _new_router(
             await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
             return
         worker_value = callback.data.split(":", 1)[1]
-        worker_id = None if worker_value == "all" else int(worker_value)
+        if worker_value == "all":
+            worker_id = None
+        else:
+            try:
+                worker_id = int(worker_value)
+            except ValueError:
+                await callback.answer("❌ Ishchi tanlovi noto‘g‘ri.", show_alert=True)
+                return
         data = await state.get_data()
-        start = datetime.fromisoformat(data["report_start"])
-        end = datetime.fromisoformat(data["report_end"])
+        try:
+            start = datetime.fromisoformat(data["report_start"])
+            end = datetime.fromisoformat(data["report_end"])
+        except (KeyError, ValueError, TypeError):
+            await state.clear()
+            await callback.answer("❌ Hisobot sessiyasi eskirgan.", show_alert=True)
+            return
         async with session_factory() as session:
             if worker_id is not None and await session.get(Worker, worker_id) is None:
                 await callback.answer("❌ Ishchi topilmadi.", show_alert=True)

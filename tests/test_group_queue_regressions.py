@@ -18,11 +18,20 @@ from ryx_wash_bot.handlers import (
     send_group_summary,
 )
 from ryx_wash_bot.keyboards import saved_cars_keyboard
-from ryx_wash_bot.models import Base, CustomerCar, Expense, Order, User, Worker
+from ryx_wash_bot.models import (
+    Base,
+    Cancellation,
+    CustomerCar,
+    Expense,
+    Order,
+    User,
+    Worker,
+)
 from ryx_wash_bot.scheduler import (
     configure_wash_timer_runtime,
     expire_wash_timeout,
 )
+from ryx_wash_bot.reports import build_financial_report
 from ryx_wash_bot.states import (
     ManualOrderStates,
     WorkerCompletionStates,
@@ -1527,6 +1536,10 @@ def test_long_group_summary_and_statistics_split_every_telegram_message():
                 len(str(text)) <= 4096
                 for text, _kwargs in report_callback.message.answer_calls
             )
+            assert all(
+                len(str(text)) <= 4096
+                for text, _kwargs in report_callback.message.answer_calls
+            )
         finally:
             await engine.dispose()
 
@@ -1699,6 +1712,186 @@ def test_photo_step_rejects_out_of_order_and_duplicate_evidence():
             async with sessions() as session:
                 order = await session.get(Order, order_id)
                 assert order.before_photo_id == "original"
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_worker_report_breaks_down_orders_and_revenue_by_worker():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, _router = await make_context()
+        try:
+            await add_people(sessions)
+            async with sessions() as session:
+                worker_two_user = User(
+                    telegram_id=WORKER_TWO_ID,
+                    name="Ishchi Ikki",
+                    phone="+998901234569",
+                    rol="ishchi",
+                )
+                session.add(worker_two_user)
+                session.add(
+                    Worker(
+                        user_id=WORKER_TWO_ID,
+                        name="Ishchi Ikki",
+                        phone="+998901234569",
+                        share_percent=Decimal("40"),
+                        status="smenada_emas",
+                    )
+                )
+                session.add_all(
+                    [
+                        Order(
+                            customer_id=CUSTOMER_ID,
+                            worker_id=WORKER_ONE_ID,
+                            car_category="Sedan",
+                            car_model="Cobalt",
+                            car_price=Decimal("50000"),
+                            plate_number="01 A 111 AA",
+                            payment_method="Naqd",
+                            status="yakunlandi",
+                            completed_at=datetime(
+                                2026, 8, 31, 5, 0, tzinfo=timezone.utc
+                            ),
+                        ),
+                        Order(
+                            customer_id=CUSTOMER_ID,
+                            worker_id=WORKER_TWO_ID,
+                            car_category="SUV",
+                            car_model="Tracker",
+                            car_price=Decimal("70000"),
+                            plate_number="01 B 222 BB",
+                            payment_method="Karta",
+                            status="yakunlandi",
+                            completed_at=datetime(
+                                2026, 8, 31, 6, 0, tzinfo=timezone.utc
+                            ),
+                        ),
+                    ]
+                )
+                await session.commit()
+                start = datetime(2026, 8, 31, tzinfo=worker_handlers.TASHKENT)
+                end = start + timedelta(days=1)
+                all_chunks = await build_financial_report(session, start, end)
+                worker_chunks = await build_financial_report(
+                    session, start, end, worker_id=WORKER_TWO_ID
+                )
+
+            all_report = "\n".join(all_chunks)
+            worker_report = "\n".join(worker_chunks)
+            assert "Ishchi" in all_report
+            assert "Ishchi Ikki" in all_report
+            assert "Yuvilgan: 1 ta" in all_report
+            assert "120 000" in all_report
+            assert "Tracker" in all_report
+            assert "01 B 222 BB" in worker_report
+            assert "70 000" in worker_report
+            assert "28 000" in worker_report
+            assert "Cobalt" not in worker_report
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_worker_report_handles_inactive_history_cancellations_and_boundaries():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, _router = await make_context()
+        try:
+            await add_people(sessions)
+            start = datetime(2026, 8, 31, tzinfo=worker_handlers.TASHKENT)
+            end = start + timedelta(days=1)
+            async with sessions() as session:
+                worker = await session.get(Worker, WORKER_ONE_ID)
+                worker.name = "<Faol emas>"
+                worker.active = False
+                worker.share_percent = Decimal("33.33")
+                included = Order(
+                    customer_id=CUSTOMER_ID,
+                    worker_id=WORKER_ONE_ID,
+                    car_category="Sedan",
+                    car_model="<Cobalt>",
+                    car_price=Decimal("5"),
+                    plate_number="01 < 02",
+                    payment_method="Naqd",
+                    status="yakunlandi",
+                    completed_at=start,
+                )
+                excluded = Order(
+                    customer_id=CUSTOMER_ID,
+                    worker_id=WORKER_ONE_ID,
+                    car_category="SUV",
+                    car_model="Chegaradan tashqari",
+                    car_price=Decimal("999"),
+                    plate_number="01 Z 999 ZZ",
+                    payment_method="Karta",
+                    status="yakunlandi",
+                    completed_at=end,
+                )
+                cancelled = Order(
+                    customer_id=CUSTOMER_ID,
+                    worker_id=WORKER_ONE_ID,
+                    car_category="Sedan",
+                    car_model="Nexia",
+                    car_price=Decimal("50"),
+                    status="bekor_qilindi",
+                )
+                session.add_all([included, excluded, cancelled])
+                await session.flush()
+                session.add(
+                    Cancellation(
+                        order_id=cancelled.id,
+                        reason="<Mijoz bekor qildi>",
+                        cancelled_by=DIRECTOR_ID,
+                        cancelled_at=start + timedelta(hours=1),
+                    )
+                )
+                await session.commit()
+                chunks = await build_financial_report(
+                    session, start, end, worker_id=WORKER_ONE_ID
+                )
+                empty_chunks = await build_financial_report(
+                    session,
+                    end + timedelta(days=1),
+                    end + timedelta(days=2),
+                    worker_id=WORKER_ONE_ID,
+                )
+
+            report = "\n".join(chunks)
+            assert "&lt;Faol emas&gt;" in report
+            assert "&lt;Cobalt&gt;" in report
+            assert "&lt;Mijoz bekor qildi&gt;" in report
+            assert "Bekor qilingan:</b> 1 ta" in report
+            assert "Worker ulushi (33.33%): 2 " in report
+            assert "Chegaradan tashqari" not in report
+            assert "yakunlangan buyurtmalar topilmadi" in "\n".join(empty_chunks)
+            assert all(len(chunk) <= 4096 for chunk in chunks)
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_report_rejects_malformed_worker_and_expired_session_callbacks():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            generate = handler(router, "callback_query", "generate_report")
+            malformed = RecordingCallback(
+                "report_worker:not-a-worker", DIRECTOR_ID, RecordingBot()
+            )
+            await generate(malformed, RecordingState())
+            assert malformed.answers[-1][1].get("show_alert") is True
+
+            expired = RecordingCallback(
+                f"report_worker:{WORKER_ONE_ID}", DIRECTOR_ID, RecordingBot()
+            )
+            state = RecordingState()
+            await generate(expired, state)
+            assert expired.answers[-1][1].get("show_alert") is True
+            assert state.cleared is True
         finally:
             await engine.dispose()
 

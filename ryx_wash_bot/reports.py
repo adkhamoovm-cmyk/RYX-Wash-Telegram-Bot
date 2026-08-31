@@ -1,6 +1,6 @@
 import html
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -15,6 +15,15 @@ TASHKENT = ZoneInfo("Asia/Tashkent")
 
 def _safe(value: object) -> str:
     return html.escape(str(value))
+
+
+def _percent(value: Decimal) -> str:
+    return format(Decimal(value).normalize(), "f")
+
+
+def _money(value: Decimal) -> str:
+    rounded = Decimal(value).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    return _safe(format_price(int(rounded)))
 
 
 def day_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -60,11 +69,14 @@ async def build_financial_report(
             Cancellation.cancelled_at < end,
         )
     )
+    workers = list((await session.scalars(select(Worker).order_by(Worker.name))).all())
     worker = None
     if worker_id is not None:
         order_query = order_query.where(Order.worker_id == worker_id)
         cancellation_query = cancellation_query.where(Order.worker_id == worker_id)
         worker = await session.get(Worker, worker_id)
+        if worker is None:
+            return ["❌ Ishchi topilmadi."]
 
     orders = list((await session.scalars(order_query.order_by(Order.completed_at))).all())
     cancellations = (await session.execute(cancellation_query)).all()
@@ -104,34 +116,39 @@ async def build_financial_report(
     period_end = end - timedelta(microseconds=1)
     filter_label = worker.name if worker else "Barcha ishchilar"
     header = (
-        "<b>📊 Moliyaviy hisobot</b>\n\n"
+        "<b>📊 RYX WASH HISOBOTI</b>\n\n"
         f"<b>Davr:</b> {start.astimezone(TASHKENT):%d.%m.%Y} — "
         f"{period_end.astimezone(TASHKENT):%d.%m.%Y}\n"
         f"<b>Filtr:</b> {_safe(filter_label)}\n\n"
-        f"<b>💰 Umumiy kirim:</b> {_safe(format_price(int(revenue)))}\n"
-        f"• 💵 Naqd: {_safe(format_price(int(cash)))}\n"
-        f"• 💳 Karta: {_safe(format_price(int(card)))}\n"
-        f"<b>📉 Umumiy chiqim:</b> {_safe(format_price(int(expense_total)))}\n"
-        f"<b>💰 Sof foyda:</b> {_safe(format_price(int(net_profit)))}\n"
         f"<b>🧼 Yuvilgan mashinalar:</b> {len(orders)} ta\n"
-        f"<b>🚫 Bekor qilingan buyurtmalar:</b> {len(cancellations)} ta"
+        f"<b>💰 Umumiy tushum:</b> {_money(revenue)}\n"
+        f"• 💵 Naqd: {_money(cash)}\n"
+        f"• 💳 Karta: {_money(card)}\n"
+        f"<b>🚫 Bekor qilingan:</b> {len(cancellations)} ta"
     )
     if worker is not None:
         worker_share = revenue * Decimal(worker.share_percent) / Decimal("100")
+        average_check = revenue / len(orders) if orders else Decimal("0")
         header += (
-            f"\n<b>👷 {_safe(worker.name)} ulushi "
-            f"({worker.share_percent:g}%):</b> "
-            f"{_safe(format_price(int(worker_share)))}"
+            f"\n\n<b>👷 {_safe(worker.name)} hisoboti</b>\n"
+            f"• 📈 O‘rtacha chek: {_money(average_check)}\n"
+            f"• 💼 Worker ulushi "
+            f"({_percent(worker.share_percent)}%): "
+            f"{_money(worker_share)}"
         )
-    if worker_id is not None:
-        header += "\n<i>📉 Chiqimlar davr bo'yicha umumiy ko'rsatildi.</i>"
+    else:
+        header += (
+            f"\n\n<b>📉 Umumiy chiqim:</b> "
+            f"{_money(expense_total)}\n"
+            f"<b>💰 Sof foyda:</b> {_money(net_profit)}"
+        )
 
     detail_lines: list[str] = []
-    if expenses:
+    if worker is None and expenses:
         detail_lines.append("\n<b>📉 Chiqimlar:</b>")
         detail_lines.extend(
             f"• {_safe(expense.description)} — "
-            f"{_safe(format_price(int(expense.amount)))}"
+            f"{_money(Decimal(expense.amount))}"
             for expense in expenses
         )
     if cancellations:
@@ -141,6 +158,94 @@ async def build_financial_report(
             if len(reason) > 1000:
                 reason = reason[:997] + "..."
             detail_lines.append(f"• Buyurtma #{order.id}: {reason}")
+    if worker is not None:
+        if not orders:
+            detail_lines.append("\n<i>Bu davrda yakunlangan buyurtmalar topilmadi.</i>")
+        else:
+            detail_lines.append("\n<b>🧾 Buyurtmalar:</b>")
+            for order in orders:
+                completed_at = order.completed_at
+                if completed_at is not None:
+                    completed_at = completed_at.astimezone(TASHKENT)
+                    date_label = completed_at.strftime("%d.%m %H:%M")
+                else:
+                    date_label = "—"
+                payment = order.payment_method or "To‘lov ko‘rsatilmagan"
+                plate = order.plate_number or "Raqam ko‘rsatilmagan"
+                detail_lines.append(
+                    f"• <b>#{order.id}</b> {date_label} — "
+                    f"{_safe(order.car_model)} | {_safe(plate)} | "
+                    f"{_money(Decimal(order.car_price))} | "
+                    f"{_safe(payment)}"
+                )
+    else:
+        orders_by_worker: dict[int | None, list[Order]] = {}
+        for order in orders:
+            orders_by_worker.setdefault(order.worker_id, []).append(order)
+        cancellations_by_worker: dict[int | None, int] = {}
+        for _cancellation, cancelled_order in cancellations:
+            cancellations_by_worker[cancelled_order.worker_id] = (
+                cancellations_by_worker.get(cancelled_order.worker_id, 0) + 1
+            )
+        for listed_worker in workers:
+            worker_orders = orders_by_worker.get(listed_worker.user_id, [])
+            worker_revenue = sum(
+                (Decimal(order.car_price) for order in worker_orders),
+                Decimal("0"),
+            )
+            worker_cash = sum(
+                (
+                    Decimal(order.car_price)
+                    for order in worker_orders
+                    if order.payment_method == "Naqd"
+                ),
+                Decimal("0"),
+            )
+            worker_card = sum(
+                (
+                    Decimal(order.car_price)
+                    for order in worker_orders
+                    if order.payment_method == "Karta"
+                ),
+                Decimal("0"),
+            )
+            worker_share = (
+                worker_revenue * Decimal(listed_worker.share_percent) / Decimal("100")
+            )
+            average_check = (
+                worker_revenue / len(worker_orders) if worker_orders else Decimal("0")
+            )
+            detail_lines.extend(
+                [
+                    f"\n<b>👷 {_safe(listed_worker.name)}</b>",
+                    f"• 🧼 Yuvilgan: {len(worker_orders)} ta",
+                    f"• 🚫 Bekor qilingan: "
+                    f"{cancellations_by_worker.get(listed_worker.user_id, 0)} ta",
+                    f"• 💰 Tushum: {_money(worker_revenue)}",
+                    f"  ├ Naqd: {_money(worker_cash)}",
+                    f"  ├ Karta: {_money(worker_card)}",
+                    f"• 📈 O‘rtacha chek: {_money(average_check)}",
+                    f"• 💼 Ulush ({_percent(listed_worker.share_percent)}%): "
+                    f"{_money(worker_share)}",
+                ]
+            )
+            if worker_orders:
+                for order in worker_orders:
+                    completed_at = order.completed_at
+                    date_label = (
+                        completed_at.astimezone(TASHKENT).strftime("%d.%m %H:%M")
+                        if completed_at is not None
+                        else "—"
+                    )
+                    detail_lines.append(
+                        f"  • #{order.id} {date_label} — "
+                        f"{_safe(order.car_model)} | "
+                        f"{_safe(order.plate_number or 'Raqam yo‘q')} | "
+                        f"{_money(Decimal(order.car_price))} | "
+                        f"{_safe(order.payment_method or 'To‘lov ko‘rsatilmagan')}"
+                    )
+            else:
+                detail_lines.append("  <i>Davrda yakunlangan order yo‘q.</i>")
 
     chunks: list[str] = []
     current = header
