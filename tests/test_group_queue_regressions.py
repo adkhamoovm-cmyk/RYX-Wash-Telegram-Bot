@@ -23,7 +23,11 @@ from ryx_wash_bot.scheduler import (
     configure_wash_timer_runtime,
     expire_wash_timeout,
 )
-from ryx_wash_bot.states import ManualOrderStates
+from ryx_wash_bot.states import (
+    ManualOrderStates,
+    WorkerCompletionStates,
+    WorkerOrderStates,
+)
 from ryx_wash_bot import worker_handlers
 
 
@@ -789,6 +793,7 @@ def test_worker_enters_missing_manual_order_plate_after_washing():
             after = handler(router, "message", "receive_after_photo")
             await before(
                 SimpleNamespace(
+                    from_user=SimpleNamespace(id=WORKER_ONE_ID),
                     photo=[SimpleNamespace(file_id="before-photo")],
                     answer=RecordingMessage(bot, WORKER_ONE_ID).answer,
                 ),
@@ -796,6 +801,7 @@ def test_worker_enters_missing_manual_order_plate_after_washing():
             )
             await after(
                 SimpleNamespace(
+                    from_user=SimpleNamespace(id=WORKER_ONE_ID),
                     photo=[SimpleNamespace(file_id="after-photo")],
                     answer=RecordingMessage(bot, WORKER_ONE_ID).answer,
                 ),
@@ -1183,6 +1189,7 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             after = handler(router, "message", "receive_after_photo")
             await before(
                 SimpleNamespace(
+                    from_user=SimpleNamespace(id=WORKER_ONE_ID),
                     photo=[SimpleNamespace(file_id="before-photo")],
                     answer=RecordingMessage(bot, WORKER_ONE_ID).answer,
                 ),
@@ -1190,11 +1197,22 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             )
             await after(
                 SimpleNamespace(
+                    from_user=SimpleNamespace(id=WORKER_ONE_ID),
                     photo=[SimpleNamespace(file_id="after-photo")],
                     answer=RecordingMessage(bot, WORKER_ONE_ID).answer,
                 ),
                 state,
             )
+            original_send_message = bot.send_message
+
+            async def assert_state_cleared_before_queue_offer(
+                chat_id: int, text: str, **kwargs
+            ):
+                if chat_id == WORKER_ONE_ID and "Yangi buyurtma" in text:
+                    assert state.cleared is True
+                return await original_send_message(chat_id, text, **kwargs)
+
+            bot.send_message = assert_state_cleared_before_queue_offer
             await handler(router, "message", "complete_order")(
                 RecordingMessage(bot, WORKER_ONE_ID, "Yuvish tugadi"),
                 state,
@@ -1547,6 +1565,140 @@ def test_offline_customer_does_not_stop_worker_acceptance_flow():
             assert orders[0].status == "ishchi_qabul_qildi"
             assert orders[0].worker_id == WORKER_ONE_ID
             assert all(call[1] != -1 for call in bot.calls)
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_worker_cabinet_resumes_plate_step_after_menu_state_reset():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions, worker_statuses=("band",))
+            async with sessions() as session:
+                order = Order(
+                    customer_id=CUSTOMER_ID,
+                    worker_id=WORKER_ONE_ID,
+                    car_category="Sedan",
+                    car_model="Cobalt",
+                    car_price=Decimal("50000"),
+                    status="yakunlanmoqda",
+                )
+                session.add(order)
+                await session.commit()
+                order_id = order.id
+
+            state = RecordingState({"stale": "photo"})
+            message = RecordingMessage(
+                RecordingBot(), WORKER_ONE_ID, "👤 Mening kabinetim"
+            )
+            cabinet = handler(router, "message", "show_worker_cabinet")
+
+            async def next_handler(event, data):
+                await cabinet(event, data["state"])
+
+            await MainMenuStateResetMiddleware()(
+                next_handler, message, {"state": state}
+            )
+
+            assert state.cleared is True
+            assert state.data == {"order_id": order_id}
+            assert state.states[-1] == WorkerOrderStates.waiting_plate
+            assert any(
+                "Davlat raqamini" in str(text)
+                for text, _ in message.answer_calls
+            )
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_stale_payment_callback_cannot_mutate_another_order():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions, worker_statuses=("band",))
+            async with sessions() as session:
+                orders = [
+                    Order(
+                        customer_id=CUSTOMER_ID,
+                        worker_id=WORKER_ONE_ID,
+                        car_category="Sedan",
+                        car_model=f"Cobalt {index}",
+                        car_price=Decimal("50000"),
+                        plate_number=f"01 A 00{index} AA",
+                        status="yakunlanmoqda",
+                    )
+                    for index in (1, 2)
+                ]
+                session.add_all(orders)
+                await session.commit()
+                first_id, second_id = (order.id for order in orders)
+
+            state = RecordingState({"order_id": first_id})
+            callback = RecordingCallback(
+                f"worker_payment:Naqd:{second_id}",
+                WORKER_ONE_ID,
+                RecordingBot(),
+            )
+            await handler(router, "callback_query", "receive_worker_payment")(
+                callback, state
+            )
+
+            async with sessions() as session:
+                second = await session.get(Order, second_id)
+                assert second.payment_method is None
+            assert callback.answers[-1][1].get("show_alert") is True
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_photo_step_rejects_out_of_order_and_duplicate_evidence():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions, worker_statuses=("band",))
+            async with sessions() as session:
+                order = Order(
+                    customer_id=CUSTOMER_ID,
+                    worker_id=WORKER_ONE_ID,
+                    car_category="Sedan",
+                    car_model="Cobalt",
+                    car_price=Decimal("50000"),
+                    plate_number="01 A 123 BC",
+                    payment_method=None,
+                    status="yakunlanmoqda",
+                )
+                session.add(order)
+                await session.commit()
+                order_id = order.id
+
+            state = RecordingState({"order_id": order_id})
+            message = SimpleNamespace(
+                from_user=SimpleNamespace(id=WORKER_ONE_ID),
+                photo=[SimpleNamespace(file_id="out-of-order")],
+                answer=RecordingMessage(
+                    RecordingBot(), WORKER_ONE_ID
+                ).answer,
+            )
+            before = handler(router, "message", "receive_before_photo")
+            await before(message, state)
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order.before_photo_id is None
+                order.payment_method = "Naqd"
+                order.before_photo_id = "original"
+                await session.commit()
+
+            duplicate_state = RecordingState({"order_id": order_id})
+            await before(message, duplicate_state)
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order.before_photo_id == "original"
         finally:
             await engine.dispose()
 
