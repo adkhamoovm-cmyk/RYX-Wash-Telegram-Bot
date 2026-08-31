@@ -1,0 +1,208 @@
+lidation errors for Settings
+2026-08-31T17:23:00.286340412Z [err]  BOT_TOKEN
+2026-08-31T17:23:00.286344332Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:00.286347222Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:00.286350032Z [err]  DATABASE_URL
+2026-08-31T17:23:00.286352372Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:00.286354932Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:00.286360372Z [err]  DIRECTOR_ID
+2026-08-31T17:23:00.286363142Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:00.286366262Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:03.341824570Z [err]  Traceback (most recent call last):
+2026-08-31T17:23:03.341828750Z [err]    File "/app/main.py", line 5, in <module>
+2026-08-31T17:23:03.341831450Z [err]      main()
+2026-08-31T17:23:03.341835270Z [err]      ~~~~^^
+2026-08-31T17:23:03.341837860Z [err]    File "/app/ryx_wash_bot/main.py", line 77, in main
+2026-08-31T17:23:03.341840330Z [err]      asyncio.run(run())
+2026-08-31T17:23:03.341843030Z [err]      ~~~~~~~~~~~^^^^^^^
+2026-08-31T17:23:03.341845830Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 196, in run
+2026-08-31T17:23:03.341848230Z [err]      return runner.run(main)
+2026-08-31T17:23:03.341850500Z [err]             ~~~~~~~~~~^^^^^^
+2026-08-31T17:23:03.341852690Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 119, in run
+2026-08-31T17:23:03.341855130Z [err]      return self._loop.run_until_complete(task)
+2026-08-31T17:23:03.341857740Z [err]             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+2026-08-31T17:23:03.341860260Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/base_events.py", line 726, in run_until_complete
+2026-08-31T17:23:03.341862580Z [err]      return future.result()
+2026-08-31T17:23:03.341864760Z [err]             ~~~~~~~~~~~~~^^
+2026-08-31T17:23:03.341867760Z [err]    File "/app/ryx_wash_bot/main.py", line 19, in run
+2026-08-31T17:23:03.341870290Z [err]      settings = Settings()
+2026-08-31T17:23:03.341873000Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic_settings/main.py", line 262, in __init__
+2026-08-31T17:23:03.341875330Z [err]      super().__init__(**__pydantic_self__.__class__._settings_build_values(sources, init_kwargs))
+2026-08-31T17:23:03.341878200Z [err]      ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-08-31T17:23:03.341880639Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic/main.py", line 263, in __init__
+2026-08-31T17:23:03.342112796Z [err]      validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+2026-08-31T17:23:03.342115276Z [err]  pydantic_core._pydantic_core.ValidationError: 3 validation errors for Settings
+2026-08-31T17:23:03.342117696Z [err]  BOT_TOKEN
+2026-08-31T17:23:03.342121046Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:03.342123416Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:03.342125646Z [err]  DATABASE_URL
+2026-08-31T17:23:03.342127996Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:03.342130206Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:03.342132836Z [err]  DIRECTOR_ID
+2026-08-31T17:23:03.342135456Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:03.342137646Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:06.442445268Z [err]  Traceback (most recent call last):
+2026-08-31T17:23:06.442449848Z [err]    File "/app/main.py", line 5, in <module>
+2026-08-31T17:23:06.442452838Z [err]      main()
+2026-08-31T17:23:06.442457758Z [err]      ~~~~^^
+2026-08-31T17:23:06.442460378Z [err]    File "/app/ryx_wash_bot/main.py", line 77, in main
+2026-08-31T17:23:06.442463718Z [err]      asyncio.run(run())
+2026-08-31T17:23:06.442466608Z [err]      ~~~~~~~~~~~^^^^^^^
+2026-08-31T17:23:06.442470038Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 196, in run
+2026-08-31T17:23:06.442472888Z [err]      return runner.run(main)
+2026-08-31T17:23:06.442475338Z [err]             ~~~~~~~~~~^^^^^^
+2026-08-31T17:23:06.442478148Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 119, in run
+2026-08-31T17:23:06.442480578Z [err]      return self._loop.run_until_complete(task)
+2026-08-31T17:23:06.442483827Z [err]             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+2026-08-31T17:23:06.442486697Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/base_events.py", line 726, in run_until_complete
+2026-08-31T17:23:06.442489457Z [err]      return future.result()
+2026-08-31T17:23:06.442491727Z [err]             ~~~~~~~~~~~~~^^
+2026-08-31T17:23:06.442494307Z [err]    File "/app/ryx_wash_bot/main.py", line 19, in run
+2026-08-31T17:23:06.442497567Z [err]      settings = Settings()
+2026-08-31T17:23:06.442500327Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic_settings/main.py", line 262, in __init__
+2026-08-31T17:23:06.442502637Z [err]      super().__init__(**__pydantic_self__.__class__._settings_build_values(sources, init_kwargs))
+2026-08-31T17:23:06.442505517Z [err]      ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-08-31T17:23:06.442508737Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic/main.py", line 263, in __init__
+2026-08-31T17:23:06.442740854Z [err]      validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+2026-08-31T17:23:06.442746043Z [err]  pydantic_core._pydantic_core.ValidationError: 3 validation errors for Settings
+2026-08-31T17:23:06.442749033Z [err]  BOT_TOKEN
+2026-08-31T17:23:06.442751563Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:06.442756073Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:06.442759333Z [err]  DATABASE_URL
+2026-08-31T17:23:06.442761583Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:06.442763893Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:06.442766503Z [err]  DIRECTOR_ID
+2026-08-31T17:23:06.442769053Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:06.442771283Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:09.717715683Z [err]  Traceback (most recent call last):
+2026-08-31T17:23:09.717719673Z [err]    File "/app/main.py", line 5, in <module>
+2026-08-31T17:23:09.717723173Z [err]      main()
+2026-08-31T17:23:09.717727113Z [err]      ~~~~^^
+2026-08-31T17:23:09.717731443Z [err]    File "/app/ryx_wash_bot/main.py", line 77, in main
+2026-08-31T17:23:09.717735013Z [err]      asyncio.run(run())
+2026-08-31T17:23:09.717738343Z [err]      ~~~~~~~~~~~^^^^^^^
+2026-08-31T17:23:09.717742492Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 196, in run
+2026-08-31T17:23:09.717746042Z [err]      return runner.run(main)
+2026-08-31T17:23:09.717749262Z [err]             ~~~~~~~~~~^^^^^^
+2026-08-31T17:23:09.717753142Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 119, in run
+2026-08-31T17:23:09.717757552Z [err]      return self._loop.run_until_complete(task)
+2026-08-31T17:23:09.717760972Z [err]             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+2026-08-31T17:23:09.717764342Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/base_events.py", line 726, in run_until_complete
+2026-08-31T17:23:09.717767762Z [err]      return future.result()
+2026-08-31T17:23:09.717771282Z [err]             ~~~~~~~~~~~~~^^
+2026-08-31T17:23:09.717775152Z [err]    File "/app/ryx_wash_bot/main.py", line 19, in run
+2026-08-31T17:23:09.717778552Z [err]      settings = Settings()
+2026-08-31T17:23:09.717781852Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic_settings/main.py", line 262, in __init__
+2026-08-31T17:23:09.717785342Z [err]      super().__init__(**__pydantic_self__.__class__._settings_build_values(sources, init_kwargs))
+2026-08-31T17:23:09.717788782Z [err]      ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-08-31T17:23:09.717792332Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic/main.py", line 263, in __init__
+2026-08-31T17:23:09.717875360Z [err]      validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+2026-08-31T17:23:09.717880620Z [err]  pydantic_core._pydantic_core.ValidationError: 3 validation errors for Settings
+2026-08-31T17:23:09.717884611Z [err]  BOT_TOKEN
+2026-08-31T17:23:09.717887621Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:09.717892651Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:09.717895441Z [err]  DATABASE_URL
+2026-08-31T17:23:09.717897971Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:09.717900721Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:09.717903411Z [err]  DIRECTOR_ID
+2026-08-31T17:23:09.717906121Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:09.717908771Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:12.537840765Z [err]  pydantic_core._pydantic_core.ValidationError: 3 validation errors for Settings
+2026-08-31T17:23:12.537849285Z [err]      ~~~~~~~~~~~^^^^^^^
+2026-08-31T17:23:12.537860275Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 196, in run
+2026-08-31T17:23:12.537866195Z [err]      return runner.run(main)
+2026-08-31T17:23:12.537870585Z [err]             ~~~~~~~~~~^^^^^^
+2026-08-31T17:23:12.537875105Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 119, in run
+2026-08-31T17:23:12.537881285Z [err]      return self._loop.run_until_complete(task)
+2026-08-31T17:23:12.537889204Z [err]  Traceback (most recent call last):
+2026-08-31T17:23:12.537889644Z [err]             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+2026-08-31T17:23:12.537894754Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/base_events.py", line 726, in run_until_complete
+2026-08-31T17:23:12.537899574Z [err]    File "/app/main.py", line 5, in <module>
+2026-08-31T17:23:12.537902694Z [err]      return future.result()
+2026-08-31T17:23:12.537909264Z [err]      main()
+2026-08-31T17:23:12.537909504Z [err]             ~~~~~~~~~~~~~^^
+2026-08-31T17:23:12.537917594Z [err]      ~~~~^^
+2026-08-31T17:23:12.537917804Z [err]    File "/app/ryx_wash_bot/main.py", line 19, in run
+2026-08-31T17:23:12.537924804Z [err]      settings = Settings()
+2026-08-31T17:23:12.537925614Z [err]    File "/app/ryx_wash_bot/main.py", line 77, in main
+2026-08-31T17:23:12.537931954Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic_settings/main.py", line 262, in __init__
+2026-08-31T17:23:12.537932764Z [err]      asyncio.run(run())
+2026-08-31T17:23:12.537937254Z [err]      super().__init__(**__pydantic_self__.__class__._settings_build_values(sources, init_kwargs))
+2026-08-31T17:23:12.537941354Z [err]      ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-08-31T17:23:12.537947904Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic/main.py", line 263, in __init__
+2026-08-31T17:23:12.537950404Z [err]  BOT_TOKEN
+2026-08-31T17:23:12.537954193Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:12.537955863Z [err]      validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+2026-08-31T17:23:12.537966623Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:12.537968863Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:12.537975133Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:12.537977133Z [err]  DIRECTOR_ID
+2026-08-31T17:23:12.537982033Z [err]  DATABASE_URL
+2026-08-31T17:23:12.537984193Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:12.537989143Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:15.532358328Z [err]  Traceback (most recent call last):
+2026-08-31T17:23:15.532365108Z [err]    File "/app/main.py", line 5, in <module>
+2026-08-31T17:23:15.532367708Z [err]      main()
+2026-08-31T17:23:15.532370548Z [err]      ~~~~^^
+2026-08-31T17:23:15.532373628Z [err]    File "/app/ryx_wash_bot/main.py", line 77, in main
+2026-08-31T17:23:15.532376178Z [err]      asyncio.run(run())
+2026-08-31T17:23:15.532378348Z [err]      ~~~~~~~~~~~^^^^^^^
+2026-08-31T17:23:15.532381098Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 196, in run
+2026-08-31T17:23:15.532383698Z [err]      return runner.run(main)
+2026-08-31T17:23:15.532386268Z [err]             ~~~~~~~~~~^^^^^^
+2026-08-31T17:23:15.532388688Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 119, in run
+2026-08-31T17:23:15.532390828Z [err]      return self._loop.run_until_complete(task)
+2026-08-31T17:23:15.532392878Z [err]             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+2026-08-31T17:23:15.532395728Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/base_events.py", line 726, in run_until_complete
+2026-08-31T17:23:15.532398127Z [err]      return future.result()
+2026-08-31T17:23:15.532400727Z [err]             ~~~~~~~~~~~~~^^
+2026-08-31T17:23:15.532403017Z [err]    File "/app/ryx_wash_bot/main.py", line 19, in run
+2026-08-31T17:23:15.532405437Z [err]      settings = Settings()
+2026-08-31T17:23:15.532408657Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic_settings/main.py", line 262, in __init__
+2026-08-31T17:23:15.532411047Z [err]      super().__init__(**__pydantic_self__.__class__._settings_build_values(sources, init_kwargs))
+2026-08-31T17:23:15.532413217Z [err]      ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-08-31T17:23:15.532415517Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic/main.py", line 263, in __init__
+2026-08-31T17:23:15.533186165Z [err]      validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+2026-08-31T17:23:15.533189895Z [err]  pydantic_core._pydantic_core.ValidationError: 3 validation errors for Settings
+2026-08-31T17:23:15.533192915Z [err]  BOT_TOKEN
+2026-08-31T17:23:15.533196365Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:15.533199805Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:15.533202845Z [err]  DATABASE_URL
+2026-08-31T17:23:15.533206255Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:15.533209645Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:15.533213225Z [err]  DIRECTOR_ID
+2026-08-31T17:23:15.533216815Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:15.533220155Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:18.454117476Z [err]  Traceback (most recent call last):
+2026-08-31T17:23:18.454122246Z [err]    File "/app/main.py", line 5, in <module>
+2026-08-31T17:23:18.454125746Z [err]      main()
+2026-08-31T17:23:18.454129196Z [err]      ~~~~^^
+2026-08-31T17:23:18.454135145Z [err]    File "/app/ryx_wash_bot/main.py", line 77, in main
+2026-08-31T17:23:18.454138515Z [err]      asyncio.run(run())
+2026-08-31T17:23:18.454142155Z [err]      ~~~~~~~~~~~^^^^^^^
+2026-08-31T17:23:18.454145465Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 196, in run
+2026-08-31T17:23:18.454148935Z [err]      return runner.run(main)
+2026-08-31T17:23:18.454152105Z [err]             ~~~~~~~~~~^^^^^^
+2026-08-31T17:23:18.454155295Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/runners.py", line 119, in run
+2026-08-31T17:23:18.454159145Z [err]      return self._loop.run_until_complete(task)
+2026-08-31T17:23:18.454162735Z [err]             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+2026-08-31T17:23:18.454166345Z [err]    File "/mise/installs/python/3.13.15/lib/python3.13/asyncio/base_events.py", line 726, in run_until_complete
+2026-08-31T17:23:18.454175555Z [err]      return future.result()
+2026-08-31T17:23:18.454179455Z [err]             ~~~~~~~~~~~~~^^
+2026-08-31T17:23:18.454182705Z [err]    File "/app/ryx_wash_bot/main.py", line 19, in run
+2026-08-31T17:23:18.454186315Z [err]      settings = Settings()
+2026-08-31T17:23:18.454190265Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic_settings/main.py", line 262, in __init__
+2026-08-31T17:23:18.454193695Z [err]      super().__init__(**__pydantic_self__.__class__._settings_build_values(sources, init_kwargs))
+2026-08-31T17:23:18.454197035Z [err]      ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+2026-08-31T17:23:18.454200184Z [err]    File "/app/.venv/lib/python3.13/site-packages/pydantic/main.py", line 263, in __init__
+2026-08-31T17:23:18.454550799Z [err]      validated_self = self.__pydantic_validator__.validate_python(data, self_instance=self)
+2026-08-31T17:23:18.454556079Z [err]  pydantic_core._pydantic_core.ValidationError: 3 validation errors for Settings
+2026-08-31T17:23:18.454559699Z [err]  BOT_TOKEN
+2026-08-31T17:23:18.454563119Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:18.454566889Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:18.454570649Z [err]  DATABASE_URL
+2026-08-31T17:23:18.454574369Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:18.454576829Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
+2026-08-31T17:23:18.454579449Z [err]  DIRECTOR_ID
+2026-08-31T17:23:18.454581949Z [err]    Field required [type=missing, input_value={}, input_type=dict]
+2026-08-31T17:23:18.454584569Z [err]      For further information visit https://errors.pydantic.dev/2.13/v/missing
