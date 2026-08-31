@@ -139,9 +139,6 @@ def crm_customers_keyboard(customers: list):
 
 def crm_card_keyboard(phone: str | None):
     builder = InlineKeyboardBuilder()
-    if phone:
-        normalized = phone.strip().replace(" ", "").replace("(", "").replace(")", "")
-        builder.button(text="📞 Telefon qilish", url=f"tel:{normalized}")
     builder.button(text="🔎 Mijozni qidirish", callback_data="crm_search")
     builder.button(text="⭐ Eng faol mijozlar", callback_data="crm_top")
     builder.adjust(1)

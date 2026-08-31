@@ -430,6 +430,7 @@ def test_director_manual_order_skips_color_and_photo():
     async def scenario():
         engine, sessions, _settings, scheduler, router = await make_context()
         try:
+            await add_people(sessions)
             state = RecordingState(
                 {
                     "car_category": "Sedan",
@@ -476,10 +477,11 @@ def test_manual_visit_time_requires_a_future_tashkent_time():
     assert _parse_manual_visit_time("17:60", now=now) is None
 
 
-def test_manual_order_requests_payment_and_visit_time_before_location():
+def test_manual_order_skips_payment_and_requests_visit_time_before_location():
     async def scenario():
         engine, sessions, settings, scheduler, router = await make_context()
         try:
+            await add_people(sessions)
             bot = RecordingBot()
             state = RecordingState(
                 {
@@ -501,20 +503,39 @@ def test_manual_order_requests_payment_and_visit_time_before_location():
             await handler(router, "callback_query", "finish_manual_cars")(
                 finish_callback, state
             )
-            assert state.states[-1] == ManualOrderStates.waiting_payment
-            assert "To'lov usulini tanlang" in str(
-                finish_callback.message.answer_calls[-1][0]
-            )
-
-            payment_callback = RecordingCallback(
-                "payment:Karta", DIRECTOR_ID, bot
-            )
-            await handler(router, "callback_query", "manual_payment")(
-                payment_callback, state
-            )
             assert state.states[-1] == ManualOrderStates.waiting_visit_time
-            assert state.data["payment_method"] == "Karta"
-            assert "HH:MM" in str(payment_callback.message.answer_calls[-1][0])
+            assert "payment_method" not in state.data
+            prompt = str(finish_callback.message.answer_calls[-1][0])
+            assert "HH:MM" in prompt
+            assert "To'lov" not in prompt
+            assert "Naqd" not in prompt
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_malformed_assignment_and_payment_callbacks_are_rejected_safely():
+    async def scenario():
+        engine, _sessions, _settings, _scheduler, router = await make_context()
+        try:
+            bot = RecordingBot()
+            assignment = RecordingCallback(
+                "assign_worker_wash_duration:not-an-id:2:60",
+                DIRECTOR_ID,
+                bot,
+            )
+            await handler(router, "callback_query", "assign_order")(assignment)
+            assert assignment.answers
+            assert assignment.answers[-1][1].get("show_alert") is True
+
+            state = RecordingState()
+            payment = RecordingCallback("payment:bogus", CUSTOMER_ID, bot)
+            await handler(router, "callback_query", "choose_payment")(
+                payment, state
+            )
+            assert "payment_method" not in state.data
+            assert payment.answers[-1][1].get("show_alert") is True
         finally:
             await engine.dispose()
 

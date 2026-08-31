@@ -515,6 +515,28 @@ def _new_router(
             user = await find_user(session, user_id)
             return bool(user and user.rol == "direktor")
 
+    async def require_director_message(
+        message: Message,
+        state: FSMContext,
+    ) -> bool:
+        if (
+            message.from_user is not None
+            and await director_allowed(message.from_user.id)
+        ):
+            return True
+        await state.clear()
+        await message.answer("❌ Bu amal faqat direktor uchun.")
+        return False
+
+    async def require_director_callback(callback: CallbackQuery) -> bool:
+        if (
+            callback.from_user is not None
+            and await director_allowed(callback.from_user.id)
+        ):
+            return True
+        await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+        return False
+
     async def crm_top_customers() -> list[tuple[User, int, Decimal]]:
         paid_sum = func.coalesce(
             func.sum(
@@ -1209,6 +1231,9 @@ def _new_router(
 
     @router.callback_query(F.data == "expense_delete_cancel")
     async def cancel_delete_expense(callback: CallbackQuery) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
         await callback.answer("O‘chirish bekor qilindi.")
 
     async def ask_report_worker(message: Message, state: FSMContext) -> None:
@@ -1340,6 +1365,8 @@ def _new_router(
 
     @router.message(ManualOrderStates.waiting_customer_name, F.text)
     async def manual_customer_name(message: Message, state: FSMContext) -> None:
+        if not await require_director_message(message, state):
+            return
         name = " ".join(message.text.split())
         if len(name) < 2 or len(name) > 150:
             await message.answer("❌ Ism-familya 2–150 belgi bo'lishi kerak.")
@@ -1354,6 +1381,8 @@ def _new_router(
 
     @router.message(ManualOrderStates.waiting_customer_phone, F.text)
     async def manual_customer_phone(message: Message, state: FSMContext) -> None:
+        if not await require_director_message(message, state):
+            return
         phone = normalize_uzbek_phone(message.text)
         if phone is None:
             await message.answer(
@@ -1420,7 +1449,16 @@ def _new_router(
     ) -> None:
         data = await state.get_data()
         cars = list(data.get("cars", []))
-        cars.append({**car, "car_photo_id": None})
+        cars.append(
+            {
+                "car_category": car["car_category"],
+                "car_model": car["car_model"],
+                "car_price": car["car_price"],
+                "plate_number": car.get("plate_number"),
+                "color": None,
+                "car_photo_id": None,
+            }
+        )
         await state.update_data(cars=cars, current_car=None)
 
     @router.callback_query(
@@ -1430,7 +1468,13 @@ def _new_router(
     async def choose_saved_manual_car(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
-        car_id = int(callback.data.split(":", 1)[1])
+        if not await require_director_callback(callback):
+            return
+        try:
+            car_id = int(callback.data.split(":", 1)[1])
+        except (AttributeError, IndexError, TypeError, ValueError):
+            await callback.answer("❌ Mashina tugmasi eskirgan.", show_alert=True)
+            return
         data = await state.get_data()
         async with session_factory() as session:
             car = await session.get(CustomerCar, car_id)
@@ -1450,7 +1494,6 @@ def _new_router(
                 "car_model": car.model,
                 "car_price": model.price,
                 "plate_number": None,
-                "color": car.color,
             }
         )
         await append_manual_car(
@@ -1460,7 +1503,6 @@ def _new_router(
                 "car_model": car.model,
                 "car_price": model.price,
                 "plate_number": None,
-                "color": car.color,
             },
         )
         await state.set_state(ManualOrderStates.waiting_next_car)
@@ -1480,7 +1522,13 @@ def _new_router(
     async def page_manual_cars(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
-        page = int(callback.data.split(":", 1)[1])
+        if not await require_director_callback(callback):
+            return
+        try:
+            page = int(callback.data.split(":", 1)[1])
+        except (AttributeError, IndexError, TypeError, ValueError):
+            await callback.answer("❌ Sahifa tugmasi eskirgan.", show_alert=True)
+            return
         data = await state.get_data()
         async with session_factory() as session:
             cars = list(
@@ -1504,6 +1552,8 @@ def _new_router(
     async def choose_new_manual_car(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
+        if not await require_director_callback(callback):
+            return
         await state.set_state(ManualOrderStates.waiting_new_category)
         await callback.answer()
         await callback.message.edit_text(
@@ -1518,6 +1568,8 @@ def _new_router(
     async def manual_car_category(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
+        if not await require_director_callback(callback):
+            return
         category = callback.data.split(":", 1)[1]
         if category not in categories():
             await callback.answer("❌ Kategoriya topilmadi.", show_alert=True)
@@ -1537,6 +1589,8 @@ def _new_router(
     async def manual_car_model(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
+        if not await require_director_callback(callback):
+            return
         model = get_model(callback.data.split(":", 1)[1])
         if model is None:
             await callback.answer("❌ Model topilmadi.", show_alert=True)
@@ -1549,7 +1603,6 @@ def _new_router(
                 "car_model": model.name,
                 "car_price": model.price,
                 "plate_number": None,
-                "color": None,
             },
         )
         await state.set_state(ManualOrderStates.waiting_next_car)
@@ -1571,6 +1624,8 @@ def _new_router(
     async def add_manual_car(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
+        if not await require_director_callback(callback):
+            return
         data = await state.get_data()
         async with session_factory() as session:
             cars = list(
@@ -1596,32 +1651,15 @@ def _new_router(
     async def finish_manual_cars(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
+        if not await require_director_callback(callback):
+            return
         data = await state.get_data()
         if not data.get("cars"):
             await callback.answer("⚠️ Avval mashina qo'shing.", show_alert=True)
             return
-        await state.set_state(ManualOrderStates.waiting_payment)
-        await callback.answer()
-        await callback.message.edit_text("Mashinalar tanlandi.")
-        await callback.message.answer(
-            "💳 To'lov usulini tanlang:",
-            reply_markup=payment_keyboard(),
-        )
-
-    @router.callback_query(
-        ManualOrderStates.waiting_payment,
-        F.data.startswith("payment:"),
-    )
-    async def manual_payment(
-        callback: CallbackQuery, state: FSMContext
-    ) -> None:
-        payment_method = callback.data.split(":", 1)[1]
-        if payment_method not in {"Naqd", "Karta"}:
-            await callback.answer("❌ To'lov usuli topilmadi.", show_alert=True)
-            return
-        await state.update_data(payment_method=payment_method)
         await state.set_state(ManualOrderStates.waiting_visit_time)
         await callback.answer()
+        await callback.message.edit_text("Mashinalar tanlandi.")
         await callback.message.answer(
             "🕔 Mijoz manziliga bugun qaysi vaqtda borish kerak?\n"
             "Soatni <code>HH:MM</code> formatida kiriting, masalan: <code>17:00</code>.\n"
@@ -1631,6 +1669,8 @@ def _new_router(
 
     @router.message(ManualOrderStates.waiting_visit_time, F.text)
     async def manual_visit_time(message: Message, state: FSMContext) -> None:
+        if not await require_director_message(message, state):
+            return
         visit_at = _parse_manual_visit_time(message.text)
         if visit_at is None:
             await message.answer(
@@ -1655,6 +1695,8 @@ def _new_router(
         F.text.in_({"📝 Manzilni matn qilib yozish", "Manzilni matn qilib yozish"}),
     )
     async def manual_choose_address(message: Message, state: FSMContext) -> None:
+        if not await require_director_message(message, state):
+            return
         await state.set_state(ManualOrderStates.waiting_address)
         await message.answer(
             "Mijoz manzilini matn qilib kiriting:",
@@ -1663,6 +1705,8 @@ def _new_router(
 
     @router.message(ManualOrderStates.waiting_location, F.location)
     async def manual_location(message: Message, state: FSMContext) -> None:
+        if not await require_director_message(message, state):
+            return
         await state.update_data(
             latitude=message.location.latitude,
             longitude=message.location.longitude,
@@ -1675,7 +1719,11 @@ def _new_router(
         )
 
     @router.message(ManualOrderStates.waiting_location)
-    async def manual_require_location_choice(message: Message) -> None:
+    async def manual_require_location_choice(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not await require_director_message(message, state):
+            return
         await message.answer(
             "Lokatsiya tugmasini bosing yoki «Manzilni matn qilib yozish» "
             "variantini tanlang.",
@@ -1684,6 +1732,8 @@ def _new_router(
 
     @router.message(ManualOrderStates.waiting_address, F.text)
     async def manual_address(message: Message, state: FSMContext) -> None:
+        if not await require_director_message(message, state):
+            return
         address = " ".join(message.text.split())
         if not address or len(address) > 2000:
             await message.answer(
@@ -1701,8 +1751,17 @@ def _new_router(
         message: Message, state: FSMContext, comment: str | None
     ) -> None:
         data = await state.get_data()
+        customer_id = data.get("customer_id")
+        cars = data.get("cars")
+        if not isinstance(customer_id, int) or not isinstance(cars, list) or not cars:
+            await state.clear()
+            await message.answer(
+                "❌ Qo'lda buyurtma ma'lumotlari to'liq emas. Qaytadan boshlang.",
+                reply_markup=director_menu_keyboard(),
+            )
+            return
         async with session_factory() as session:
-            customer = await session.get(User, data["customer_id"])
+            customer = await session.get(User, customer_id)
             if customer is None:
                 await message.answer("❌ Mijoz topilmadi. Qayta boshlang.")
                 return
@@ -1720,7 +1779,6 @@ def _new_router(
                     "❌ Tashrif vaqti topilmadi. Qo'lda buyurtmani qaytadan boshlang."
                 )
                 return
-            cars = data["cars"]
             group_id = str(uuid4()) if len(cars) > 1 else None
             orders: list[Order] = []
             for car in cars:
@@ -1730,8 +1788,8 @@ def _new_router(
                     car_model=car["car_model"],
                     car_price=Decimal(str(car["car_price"])),
                     plate_number=car["plate_number"],
-                    car_color=car.get("color"),
-                    payment_method=data.get("payment_method"),
+                    car_color=None,
+                    payment_method=None,
                     visit_at=visit_at,
                     latitude=(
                         Decimal(str(data["latitude"]))
@@ -1744,7 +1802,7 @@ def _new_router(
                         else None
                     ),
                     address=data.get("address"),
-                    car_photo_id=car.get("car_photo_id"),
+                    car_photo_id=None,
                     comment=comment,
                     order_group_id=group_id,
                     status="yangi",
@@ -1759,30 +1817,23 @@ def _new_router(
             if len(orders) == 1:
                 order = orders[0]
                 director_text = (
-            f"<b>📝 Qo'lda kiritilgan buyurtma #{order.id}</b>\n\n"
-            f"<b>👤 Mijoz:</b> {_safe(customer.name)}\n"
-            f"<b>📞 Telefon:</b> {_safe(customer.phone)}\n"
-            f"<b>🚗 Kategoriya:</b> {_safe(order.car_category)}\n"
-            f"<b>🚗 Model:</b> {_safe(order.car_model)}\n"
+                    f"<b>📝 Qo'lda kiritilgan buyurtma #{order.id}</b>\n\n"
+                    f"<b>👤 Mijoz:</b> {_safe(customer.name)}\n"
+                    f"<b>📞 Telefon:</b> {_safe(customer.phone)}\n"
+                    f"<b>🚗 Kategoriya:</b> {_safe(order.car_category)}\n"
+                    f"<b>🚗 Model:</b> {_safe(order.car_model)}\n"
                     f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number or 'Ishchi manzilda kiritadi')}\n"
-            f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
-            f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-                    f"<b>💳 To'lov:</b> {_safe(order.payment_method or 'Ishchi mijoz oldida aniqlaydi')}\n"
-            f"<b>🕔 Tashrif vaqti:</b> {_safe(_format_visit_at(order.visit_at))}\n"
-            f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
-            f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
+                    f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                    "<b>💳 To'lov:</b> Ishchi mijoz oldida aniqlaydi\n"
+                    f"<b>🕔 Tashrif vaqti:</b> {_safe(_format_visit_at(order.visit_at))}\n"
+                    f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
+                    f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
                 )
                 await bot.send_message(
                     settings.director_id,
                     director_text,
                     reply_markup=new_order_assignment_keyboard(order.id),
                 )
-                if order.car_photo_id:
-                    await bot.send_photo(
-                        settings.director_id,
-                        order.car_photo_id,
-                        caption=f"📷 Buyurtma #{order.id} mashina rasmi",
-                    )
             else:
                 await send_group_summary(
                     bot,
@@ -1816,6 +1867,8 @@ def _new_router(
 
     @router.message(ManualOrderStates.waiting_comment, F.text)
     async def manual_comment(message: Message, state: FSMContext) -> None:
+        if not await require_director_message(message, state):
+            return
         comment = (
             None
             if message.text.strip() in {"⏭️ O'tkazib yuborish", "O'tkazib yuborish"}
@@ -2088,6 +2141,9 @@ def _new_router(
     @router.callback_query(OrderStates.waiting_payment, F.data.startswith("payment:"))
     async def choose_payment(callback: CallbackQuery, state: FSMContext) -> None:
         payment_method = callback.data.split(":", 1)[1]
+        if payment_method not in {"Naqd", "Karta"}:
+            await callback.answer("❌ To'lov usuli noto'g'ri.", show_alert=True)
+            return
         await state.update_data(payment_method=payment_method)
         await state.set_state(OrderStates.waiting_location)
         await callback.answer()

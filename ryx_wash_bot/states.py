@@ -48,7 +48,6 @@ class ManualOrderStates(StatesGroup):
     waiting_new_category = State()
     waiting_new_model = State()
     waiting_next_car = State()
-    waiting_payment = State()
     waiting_visit_time = State()
     waiting_location = State()
     waiting_address = State()

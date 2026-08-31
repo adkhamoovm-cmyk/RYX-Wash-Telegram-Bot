@@ -58,8 +58,32 @@ ACTIVE_ACCEPTED_STATUSES = {
     "yuvish_boshlandi",
     "yakunlanmoqda",
 }
+
+
 def _safe(value: object) -> str:
     return html.escape(str(value))
+
+
+def _callback_parts(
+    data: str | None,
+    prefix: str,
+    count: int,
+) -> tuple[str, ...] | None:
+    if not isinstance(data, str):
+        return None
+    parts = data.split(":")
+    if len(parts) != count + 1 or parts[0] != prefix:
+        return None
+    values = tuple(parts[1:])
+    return values if all(values) else None
+
+
+def _positive_int(value: str) -> int | None:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        return None
+    return result if result > 0 else None
 
 
 def _plate_display(plate_number: str | None) -> str:
@@ -430,7 +454,11 @@ def _register_user_routes(
 
     @router.callback_query(F.data.startswith("group_single:"))
     async def choose_single_worker_for_group(callback: CallbackQuery) -> None:
-        _, group_id, _lead_id = callback.data.split(":")
+        parts = _callback_parts(callback.data, "group_single", 2)
+        if parts is None or _positive_int(parts[1]) is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        group_id, _lead_id = parts
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
@@ -485,8 +513,14 @@ def _register_user_routes(
 
     @router.callback_query(F.data.startswith("group_worker:"))
     async def choose_group_wash_duration(callback: CallbackQuery) -> None:
-        _, lead_order_id_raw, worker_id_raw = callback.data.split(":")
-        lead_order_id, worker_id = int(lead_order_id_raw), int(worker_id_raw)
+        parts = _callback_parts(callback.data, "group_worker", 2)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        lead_order_id, worker_id = map(_positive_int, parts)
+        if lead_order_id is None or worker_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
@@ -534,12 +568,14 @@ def _register_user_routes(
     async def assign_group_to_worker_with_wash_duration(
         callback: CallbackQuery,
     ) -> None:
-        _, lead_order_id_raw, worker_id_raw, duration_raw = callback.data.split(":")
-        lead_order_id, worker_id, wash_duration = (
-            int(lead_order_id_raw),
-            int(worker_id_raw),
-            int(duration_raw),
-        )
+        parts = _callback_parts(callback.data, "group_worker_wash_duration", 3)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        lead_order_id, worker_id, wash_duration = map(_positive_int, parts)
+        if None in {lead_order_id, worker_id, wash_duration}:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         if not 30 <= wash_duration <= 120:
             await callback.answer("❌ Yuvish vaqti noto'g'ri.", show_alert=True)
             return
@@ -618,7 +654,11 @@ def _register_user_routes(
 
     @router.callback_query(F.data.startswith("group_split:"))
     async def split_group_orders(callback: CallbackQuery) -> None:
-        _, group_id, _lead_id = callback.data.split(":")
+        parts = _callback_parts(callback.data, "group_split", 2)
+        if parts is None or _positive_int(parts[1]) is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        group_id, _lead_id = parts
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
@@ -678,7 +718,9 @@ def _register_user_routes(
             reply_markup=ReplyKeyboardRemove(),
         )
 
-    @router.message(F.text == "👷 Ishchilarni boshqarish")
+    @router.message(
+        F.text.in_({"👷 Ishchilarni boshqarish", "Ishchilarni boshqarish"})
+    )
     async def manage_workers(message: Message) -> None:
         if not message.from_user:
             return
@@ -707,8 +749,15 @@ def _register_user_routes(
     async def choose_worker_management_action(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
-        _, action, worker_id_raw = callback.data.split(":")
-        worker_id = int(worker_id_raw)
+        parts = _callback_parts(callback.data, "worker_manage", 2)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        action, worker_id_raw = parts
+        worker_id = _positive_int(worker_id_raw)
+        if worker_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
@@ -750,7 +799,11 @@ def _register_user_routes(
     async def deactivate_worker(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
-        worker_id = int(callback.data.split(":", 1)[1])
+        parts = _callback_parts(callback.data, "worker_deactivate_confirm", 1)
+        worker_id = _positive_int(parts[0]) if parts else None
+        if worker_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
@@ -955,7 +1008,11 @@ def _register_user_routes(
     ) -> None:
         if not callback.from_user:
             return
-        order_id = int(callback.data.split(":", 1)[1])
+        parts = _callback_parts(callback.data, "assign_workers", 1)
+        order_id = _positive_int(parts[0]) if parts else None
+        if order_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
@@ -997,7 +1054,11 @@ def _register_user_routes(
 
     @router.callback_query(F.data.startswith("queue_order:"))
     async def queue_order(callback: CallbackQuery) -> None:
-        order_id = int(callback.data.split(":", 1)[1])
+        parts = _callback_parts(callback.data, "queue_order", 1)
+        order_id = _positive_int(parts[0]) if parts else None
+        if order_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
@@ -1023,7 +1084,11 @@ def _register_user_routes(
 
     @router.callback_query(F.data.startswith("busy_workers:"))
     async def show_busy_workers(callback: CallbackQuery) -> None:
-        order_id = int(callback.data.split(":", 1)[1])
+        parts = _callback_parts(callback.data, "busy_workers", 1)
+        order_id = _positive_int(parts[0]) if parts else None
+        if order_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
@@ -1062,8 +1127,14 @@ def _register_user_routes(
 
     @router.callback_query(F.data.startswith("queue_worker:"))
     async def choose_queued_wash_duration(callback: CallbackQuery) -> None:
-        _, order_id_raw, worker_id_raw = callback.data.split(":")
-        order_id, worker_id = int(order_id_raw), int(worker_id_raw)
+        parts = _callback_parts(callback.data, "queue_worker", 2)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        order_id, worker_id = map(_positive_int, parts)
+        if order_id is None or worker_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
@@ -1106,12 +1177,14 @@ def _register_user_routes(
 
     @router.callback_query(F.data.startswith("queue_worker_wash_duration:"))
     async def assign_to_busy_worker(callback: CallbackQuery) -> None:
-        _, order_id_raw, worker_id_raw, duration_raw = callback.data.split(":")
-        order_id, worker_id, wash_duration = (
-            int(order_id_raw),
-            int(worker_id_raw),
-            int(duration_raw),
-        )
+        parts = _callback_parts(callback.data, "queue_worker_wash_duration", 3)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        order_id, worker_id, wash_duration = map(_positive_int, parts)
+        if None in {order_id, worker_id, wash_duration}:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         if not 30 <= wash_duration <= 120:
             await callback.answer("❌ Yuvish vaqti noto'g'ri.", show_alert=True)
             return
@@ -1124,6 +1197,7 @@ def _register_user_routes(
             if (
                 not order
                 or not worker
+                or not worker.active
                 or order.status not in {"yangi", "navbatda"}
                 or order.worker_id is not None
                 or worker.status != "band"
@@ -1173,8 +1247,15 @@ def _register_user_routes(
 
     @router.callback_query(F.data.startswith("queue_offer:"))
     async def decide_global_queue_offer(callback: CallbackQuery) -> None:
-        _, order_id_raw, worker_id_raw, decision = callback.data.split(":")
-        order_id, worker_id = int(order_id_raw), int(worker_id_raw)
+        parts = _callback_parts(callback.data, "queue_offer", 3)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        order_id, worker_id = map(_positive_int, parts[:2])
+        decision = parts[2]
+        if order_id is None or worker_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
@@ -1226,8 +1307,14 @@ def _register_user_routes(
     ) -> None:
         if not callback.from_user:
             return
-        _, order_id_raw, worker_id_raw = callback.data.split(":")
-        order_id, worker_id = int(order_id_raw), int(worker_id_raw)
+        parts = _callback_parts(callback.data, "assign_worker", 2)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        order_id, worker_id = map(_positive_int, parts)
+        if order_id is None or worker_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
@@ -1262,12 +1349,14 @@ def _register_user_routes(
     ) -> None:
         if not callback.from_user:
             return
-        _, order_id_raw, worker_id_raw, duration_raw = callback.data.split(":")
-        order_id, worker_id, wash_duration = (
-            int(order_id_raw),
-            int(worker_id_raw),
-            int(duration_raw),
-        )
+        parts = _callback_parts(callback.data, "assign_worker_wash_duration", 3)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        order_id, worker_id, wash_duration = map(_positive_int, parts)
+        if None in {order_id, worker_id, wash_duration}:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         if not 30 <= wash_duration <= 120:
             await callback.answer("❌ Yuvish vaqti noto'g'ri.", show_alert=True)
             return
@@ -1372,7 +1461,19 @@ def _register_user_routes(
     ) -> None:
         if not callback.from_user:
             return
-        prefix, order_id_raw, worker_id_raw = callback.data.split(":")
+        if not isinstance(callback.data, str):
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        raw_parts = callback.data.split(":")
+        if len(raw_parts) != 3:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        prefix, order_id_raw, worker_id_raw = raw_parts
+        order_id = _positive_int(order_id_raw)
+        worker_id = _positive_int(worker_id_raw)
+        if order_id is None or worker_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             if not await is_director(session, callback.from_user.id):
                 await callback.answer(
@@ -1388,8 +1489,8 @@ def _register_user_routes(
         await state.set_state(DirectorAssignmentStates.waiting_custom_wash_duration)
         await state.update_data(
             assignment_kind=assignment_kind,
-            order_id=int(order_id_raw),
-            worker_id=int(worker_id_raw),
+            order_id=order_id,
+            worker_id=worker_id,
         )
         await callback.answer()
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -1470,7 +1571,11 @@ def _register_user_routes(
     async def accept_order(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
-        order_id = int(callback.data.split(":", 1)[1])
+        parts = _callback_parts(callback.data, "worker_accept", 1)
+        order_id = _positive_int(parts[0]) if parts else None
+        if order_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             order, worker = await worker_order_and_worker(
                 session, order_id, callback.from_user.id
@@ -1552,7 +1657,11 @@ def _register_user_routes(
     async def reject_order(callback: CallbackQuery) -> None:
         if not callback.from_user:
             return
-        order_id = int(callback.data.split(":", 1)[1])
+        parts = _callback_parts(callback.data, "worker_reject", 1)
+        order_id = _positive_int(parts[0]) if parts else None
+        if order_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             order, worker = await worker_order_and_worker(
                 session, order_id, callback.from_user.id
@@ -1581,16 +1690,17 @@ def _register_user_routes(
                 siblings = list(
                     (
                         await session.scalars(
-                            select(Order).where(
-                                Order.order_group_id == single_group_id,
-                                Order.id != order.id,
-                                Order.status == "navbatda",
-                            )
+                            select(Order)
+                            .where(Order.order_group_id == single_group_id)
+                            .with_for_update()
                         )
                     ).all()
                 )
                 for sibling in siblings:
+                    sibling.status = "navbatda"
                     sibling.worker_id = None
+                    sibling.assigned_at = None
+                    sibling.queued_offer = False
                     sibling.queue_offer_worker_id = None
                     sibling.queue_prompted_at = None
             worker_name = worker.name
@@ -1617,7 +1727,11 @@ def _register_user_routes(
     async def request_cancellation(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
-        order_id = int(callback.data.split(":", 1)[1])
+        parts = _callback_parts(callback.data, "cancel_order", 1)
+        order_id = _positive_int(parts[0]) if parts else None
+        if order_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             order = await session.get(Order, order_id)
             if not order:
@@ -1698,8 +1812,15 @@ def _register_user_routes(
     async def choose_cancellation_reason(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
-        _, order_id_raw, reason_code = callback.data.split(":")
-        order_id = int(order_id_raw)
+        parts = _callback_parts(callback.data, "cancel_reason", 2)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        order_id = _positive_int(parts[0])
+        reason_code = parts[1]
+        if order_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         data = await state.get_data()
         if data.get("cancel_order_id") != order_id:
             await callback.answer("⚠️ Bekor qilish ma'lumoti eskirgan.", show_alert=True)
@@ -1767,8 +1888,15 @@ def _register_user_routes(
     async def update_worker_status(callback: CallbackQuery, state: FSMContext) -> None:
         if not callback.from_user:
             return
-        _, stage, order_id_raw = callback.data.split(":")
-        order_id = int(order_id_raw)
+        parts = _callback_parts(callback.data, "worker_status", 2)
+        if parts is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
+        stage, order_id_raw = parts
+        order_id = _positive_int(order_id_raw)
+        if order_id is None:
+            await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
+            return
         async with sessions() as session:
             order, worker = await worker_order_and_worker(
                 session, order_id, callback.from_user.id
@@ -2026,10 +2154,13 @@ def _register_user_routes(
     ) -> None:
         if not callback.from_user:
             return
-        try:
-            _, payment_method, order_id_raw = callback.data.split(":")
-            order_id = int(order_id_raw)
-        except (TypeError, ValueError):
+        parts = _callback_parts(callback.data, "worker_payment", 2)
+        if parts is None:
+            await callback.answer("❌ To‘lov ma'lumoti noto‘g‘ri.", show_alert=True)
+            return
+        payment_method, order_id_raw = parts
+        order_id = _positive_int(order_id_raw)
+        if order_id is None:
             await callback.answer("❌ To‘lov ma'lumoti noto‘g‘ri.", show_alert=True)
             return
         if payment_method not in {"Naqd", "Karta"}:
