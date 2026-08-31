@@ -1,0 +1,17 @@
+Botning ISHCHI (worker) tomonidagi barcha kod fayllarini chuqur audit qil, ayniqsa FSM holatlari va tugma/callback aralashib ketish xatolariga e'tibor ber. Sabab: direktor tomonida ikki marta xuddi shunday xato topilgan edi (CRM qidiruv rejimida boshqa menyu tugmalari noto'g'ri ishlagan, va qo'lda buyurtma oqimida davlat raqami bosqichi boshqa oqimga aralashib ketgan) — bu botning umumiy arxitekturasida tizimli muammo borligini ko'rsatadi.
+
+code-review skilidan/subagentdan foydalanib, quyidagilarni tekshir:
+
+1. ISHCHIDAGI BARCHA FSM HOLATLARI RO'YXATINI CHIQAR: buyurtma qabul/rad qilish, ketma-ket status yangilash (yo'lda/yetdi/yuvilmoqda/tugadi), davlat raqami kiritish (yangi qo'shilgan), "oldin/keyin" rasm yuklash, yakuniy izoh yozish, smena boshlash/tugatish, "Mening kabinetim" bo'limi.
+
+2. Har bir matn yoki rasm kutuvchi handler FAQAT o'ziga tegishli aniq holatda (StateFilter) ishlashini tasdiqla — hech qaysi handler "har qanday holatda" umumiy tarzda xabarni ushlab qolmasligi kerak.
+
+3. QUYIDAGI ANIQ SSENARIYLARNI STRESS-TEST QIL (kod orqali, avtomatik test yozib):
+   - Ishchi "rasm yuborish" (oldin) kutilayotganda, tasodifan matn yozsa yoki boshqa tugma bossa — bot chalkashmasligi, tushunarli xabar berishi kerak
+   - Ishchi "davlat raqamini kiriting" bosqichida turganda, "Mening kabinetim" yoki "Ishga keldim/ketdim" tugmasini bossa — bot avvalgi holatni to'g'ri tozalab, yangi so'ralgan amalga o'tishi kerak, aralashmasligi kerak
+   - Ishchida navbatda bir nechta buyurtma bo'lganda (guruh buyurtma), joriy buyurtmani yakunlash jarayonida (rasm/izoh kutilayotganda) navbatdagi buyurtma haqidagi bildirishnoma kelib qolsa — bular bir-biriga aralashmasligi kerak
+   - Ishchi status tugmalarini tez-tez ketma-ket bossa (masalan "Yo'lga chiqdim" ni ikki marta) — takroriy ishlov berilmasligi kerak
+
+4. Callback data va tugma matnlari orasida moslik yo'qligi (masalan bitta tugma matni ikkita turli handlerga to'g'ri kelib qolishi) bor-yo'qligini tekshir.
+
+Topilgan barcha xatolarni tuzat, keyin xuddi direktor auditida qilingandek: birinchi tur review -> tuzatish -> ikkinchi (qayta) review -> yana tuzatish -> yakuniy "PASS" olguncha davom ettir. Yakunida barcha topilgan va tuzatilgan xatolarning to'liq ro'yxatini yoz.
