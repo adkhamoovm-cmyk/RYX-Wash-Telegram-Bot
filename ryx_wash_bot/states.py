@@ -25,6 +25,10 @@ class ReportStates(StatesGroup):
     waiting_worker = State()
 
 
+class CustomerHistoryStates(StatesGroup):
+    waiting_custom_range = State()
+
+
 class CrmStates(StatesGroup):
     waiting_search = State()
 

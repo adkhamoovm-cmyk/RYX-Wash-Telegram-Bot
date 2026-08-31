@@ -30,6 +30,7 @@ from .config import Settings
 from .keyboards import (
     category_keyboard,
     contact_keyboard,
+    customer_history_period_keyboard,
     crm_card_keyboard,
     crm_customers_keyboard,
     crm_menu_keyboard,
@@ -55,7 +56,11 @@ from .keyboards import (
     worker_menu_keyboard,
 )
 from .models import CustomerCar, Expense, Order, ServiceModel, User, Worker
-from .reports import build_financial_report, period_bounds
+from .reports import (
+    build_customer_history_report,
+    build_financial_report,
+    period_bounds,
+)
 from .states import (
     ExpenseStates,
     ManualOrderStates,
@@ -64,6 +69,7 @@ from .states import (
     RegistrationStates,
     ReportStates,
     CrmStates,
+    CustomerHistoryStates,
 )
 from .worker_handlers import register_worker_routes
 
@@ -120,6 +126,8 @@ MAIN_MENU_TEXTS = frozenset(
         "Statistika",
         "🗂️ Mijozlar bazasi",
         "Mijozlar bazasi",
+        "👥 Mijozlar tarixi",
+        "Mijozlar tarixi",
         "👤 Mening kabinetim",
         "Mening kabinetim",
         "🟢 Ishga keldim",
@@ -1357,6 +1365,94 @@ def _new_router(
         await callback.message.answer(
             "Hisobot tayyor.",
             reply_markup=director_menu_keyboard(),
+        )
+
+    async def send_customer_history(
+        target: Message,
+        state: FSMContext,
+        start: datetime,
+        end: datetime,
+    ) -> None:
+        async with session_factory() as session:
+            chunks = await build_customer_history_report(session, start, end)
+        await state.clear()
+        for chunk in chunks:
+            await target.answer(chunk)
+        await target.answer(
+            "Mijozlar tarixi tayyor.",
+            reply_markup=director_menu_keyboard(),
+        )
+
+    @router.message(F.text.in_({"👥 Mijozlar tarixi", "Mijozlar tarixi"}))
+    async def start_customer_history(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await message.answer("❌ Bu bo'lim faqat direktor uchun.")
+            return
+        await state.clear()
+        await message.answer(
+            "👥 Mijozlar tarixi uchun davrni tanlang:",
+            reply_markup=customer_history_period_keyboard(),
+        )
+
+    @router.callback_query(F.data.startswith("customer_history_period:"))
+    async def choose_customer_history_period(
+        callback: CallbackQuery,
+        state: FSMContext,
+    ) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        period = callback.data.split(":", 1)[1]
+        await callback.answer()
+        if period == "custom":
+            await state.set_state(CustomerHistoryStates.waiting_custom_range)
+            await callback.message.answer(
+                "🗓️ Sana oralig‘ini kiriting:\n"
+                "<code>01.08.2026 - 30.08.2026</code>"
+            )
+            return
+        try:
+            start, end = period_bounds(period)
+        except ValueError:
+            await callback.message.answer("❌ Hisobot davri topilmadi.")
+            return
+        await send_customer_history(callback.message, state, start, end)
+
+    @router.message(CustomerHistoryStates.waiting_custom_range, F.text)
+    async def receive_customer_history_range(
+        message: Message,
+        state: FSMContext,
+    ) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("❌ Bu bo'lim faqat direktor uchun.")
+            return
+        match = CUSTOM_RANGE_RE.fullmatch(message.text)
+        if not match:
+            await message.answer(
+                "❌ Format noto‘g‘ri. Masalan: 01.08.2026 - 30.08.2026"
+            )
+            return
+        try:
+            start = datetime.strptime(match.group(1), "%d.%m.%Y").replace(
+                tzinfo=TASHKENT
+            )
+            last_day = datetime.strptime(match.group(2), "%d.%m.%Y").replace(
+                tzinfo=TASHKENT
+            )
+        except ValueError:
+            await message.answer("❌ Sanalardan biri noto‘g‘ri.")
+            return
+        if last_day < start:
+            await message.answer(
+                "⚠️ Tugash sanasi boshlanish sanasidan oldin bo‘lmasin."
+            )
+            return
+        await send_customer_history(
+            message,
+            state,
+            start,
+            last_day + timedelta(days=1),
         )
 
     @router.message(

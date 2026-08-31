@@ -31,7 +31,11 @@ from ryx_wash_bot.scheduler import (
     configure_wash_timer_runtime,
     expire_wash_timeout,
 )
-from ryx_wash_bot.reports import build_financial_report
+from ryx_wash_bot.reports import (
+    build_customer_history_report,
+    build_financial_report,
+    period_bounds,
+)
 from ryx_wash_bot.states import (
     ManualOrderStates,
     WorkerCompletionStates,
@@ -1892,6 +1896,175 @@ def test_report_rejects_malformed_worker_and_expired_session_callbacks():
             await generate(expired, state)
             assert expired.answers[-1][1].get("show_alert") is True
             assert state.cleared is True
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_customer_history_report_shows_customer_details_and_cancellations():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            async with sessions() as session:
+                customer = await session.get(User, CUSTOMER_ID)
+                assert customer is not None
+                customer.name = "<Ali>"
+                customer.phone = "+998 90 123 45 67"
+                completed = Order(
+                    customer_id=CUSTOMER_ID,
+                    car_category="Sedan",
+                    car_model="<Cobalt>",
+                    car_price=Decimal("50000"),
+                    plate_number="01 < 111 AA",
+                    payment_method="Naqd",
+                    status="yakunlandi",
+                    created_at=datetime(
+                        2026, 8, 30, 19, 0, tzinfo=timezone.utc
+                    ),
+                )
+                cancelled = Order(
+                    customer_id=CUSTOMER_ID,
+                    car_category="SUV",
+                    car_model="Tracker",
+                    car_price=Decimal("70000"),
+                    plate_number="01 B 222 BB",
+                    status="bekor_qilindi",
+                    created_at=datetime(
+                        2026, 8, 30, 20, 0, tzinfo=timezone.utc
+                    ),
+                )
+                session.add_all([completed, cancelled])
+                await session.flush()
+                session.add(
+                    Cancellation(
+                        order_id=cancelled.id,
+                        reason="<Mijoz fikrini o‘zgartirdi>",
+                        cancelled_by=CUSTOMER_ID,
+                        cancelled_at=datetime(
+                            2026, 8, 30, 21, 0, tzinfo=timezone.utc
+                        ),
+                    )
+                )
+                await session.commit()
+                start = datetime(
+                    2026, 8, 31, tzinfo=worker_handlers.TASHKENT
+                ) - timedelta(days=1)
+                end = start + timedelta(days=1)
+                chunks = await build_customer_history_report(
+                    session, start, end
+                )
+
+            report = "\n".join(chunks)
+            assert "Unikal mijozlar:</b> 1 ta" in report
+            assert "Jami buyurtmalar:</b> 2 ta" in report
+            assert "Yakunlangan:</b> 1 ta" in report
+            assert "Bekor qilingan:</b> 1 ta" in report
+            assert "&lt;Ali&gt;" in report
+            assert "+998 90 123 45 67" in report
+            assert "&lt;Cobalt&gt;" in report
+            assert "01 &lt; 111 AA" in report
+            assert "&lt;Mijoz fikrini o‘zgartirdi&gt;" in report
+            assert all(len(chunk) <= 4096 for chunk in chunks)
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_customer_history_custom_range_handler_and_twelve_month_period():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            message = RecordingMessage(
+                RecordingBot(), DIRECTOR_ID, "👥 Mijozlar tarixi"
+            )
+            state = RecordingState()
+            await handler(router, "message", "start_customer_history")(
+                message, state
+            )
+            assert message.answer_calls
+            assert "davrni tanlang" in str(message.answer_calls[0][0])
+
+            custom = handler(
+                router,
+                "message",
+                "receive_customer_history_range",
+            )
+            message.text = "30.08.2026 - 31.08.2026"
+            await custom(message, state)
+            assert state.cleared is True
+            assert any(
+                "Mijozlar tarixi tayyor" in str(text)
+                for text, _kwargs in message.answer_calls
+            )
+
+            now = datetime(
+                2026, 8, 31, 13, 0, tzinfo=worker_handlers.TASHKENT
+            )
+            start, end = period_bounds("12months", now=now)
+            assert start == datetime(
+                2025, 9, 1, tzinfo=worker_handlers.TASHKENT
+            )
+            assert end == datetime(
+                2026, 9, 1, tzinfo=worker_handlers.TASHKENT
+            )
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_customer_history_counts_cancellation_only_manual_customer_safely():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, _router = await make_context()
+        try:
+            start = datetime(2026, 8, 31, tzinfo=worker_handlers.TASHKENT)
+            end = start + timedelta(days=1)
+            async with sessions() as session:
+                manual_id = -7001
+                session.add(
+                    User(
+                        telegram_id=manual_id,
+                        name='"' * 150,
+                        phone='"' * 40,
+                        rol="mijoz",
+                    )
+                )
+                old_order = Order(
+                    customer_id=manual_id,
+                    car_category="Sedan",
+                    car_model='"' * 100,
+                    car_price=Decimal("50000"),
+                    plate_number='"' * 30,
+                    status="bekor_qilindi",
+                    created_at=start - timedelta(days=10),
+                )
+                session.add(old_order)
+                await session.flush()
+                session.add(
+                    Cancellation(
+                        order_id=old_order.id,
+                        reason='"' * 2000,
+                        cancelled_by=DIRECTOR_ID,
+                        cancelled_at=start + timedelta(hours=2),
+                    )
+                )
+                await session.commit()
+                chunks = await build_customer_history_report(
+                    session, start, end
+                )
+
+            report = "\n".join(chunks)
+            assert "Unikal mijozlar:</b> 1 ta" in report
+            assert "Jami buyurtmalar:</b> 0 ta" in report
+            assert "Bekor qilingan:</b> 1 ta" in report
+            assert "&quot;" in report
+            assert "cancellation faolligi mavjud" in report
+            assert "..." in report
+            assert all(len(chunk) <= 4096 for chunk in chunks)
         finally:
             await engine.dispose()
 

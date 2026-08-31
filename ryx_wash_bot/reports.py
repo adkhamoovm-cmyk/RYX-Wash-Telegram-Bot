@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .catalog import format_price
 from .config import Settings
-from .models import Cancellation, Expense, Order, Worker
+from .models import Cancellation, Expense, Order, User, Worker
 
 TASHKENT = ZoneInfo("Asia/Tashkent")
 
@@ -24,6 +24,23 @@ def _percent(value: Decimal) -> str:
 def _money(value: Decimal) -> str:
     rounded = Decimal(value).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
     return _safe(format_price(int(rounded)))
+
+
+def _safe_summary(value: object, limit: int = 3000) -> str:
+    text = str(value)
+    escaped_parts: list[str] = []
+    escaped_length = 0
+    truncated = False
+    for character in text:
+        escaped_character = html.escape(character)
+        if escaped_length + len(escaped_character) > limit - 3:
+            truncated = True
+            break
+        escaped_parts.append(escaped_character)
+        escaped_length += len(escaped_character)
+    if truncated:
+        escaped_parts.append("...")
+    return "".join(escaped_parts)
 
 
 def day_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -42,8 +59,8 @@ def period_bounds(code: str, now: datetime | None = None) -> tuple[datetime, dat
         return start, tomorrow
     if code == "month":
         return today.replace(day=1), tomorrow
-    if code in {"3months", "6months"}:
-        months = 3 if code == "3months" else 6
+    if code in {"3months", "6months", "12months", "year"}:
+        months = {"3months": 3, "6months": 6, "12months": 12, "year": 12}[code]
         month_index = current.year * 12 + current.month - 1 - (months - 1)
         year, zero_based_month = divmod(month_index, 12)
         return datetime(year, zero_based_month + 1, 1, tzinfo=TASHKENT), tomorrow
@@ -253,6 +270,141 @@ async def build_financial_report(
         if len(current) + len(line) + 1 > 3800:
             chunks.append(current)
             current = "<b>📊 Hisobot davomi</b>\n" + line
+        else:
+            current += "\n" + line
+    chunks.append(current)
+    return chunks
+
+
+CUSTOMER_STATUS_LABELS = {
+    "yangi": "🕐 Yangi",
+    "navbatda": "⏳ Navbatda",
+    "ishchiga_yuborildi": "📤 Ishchiga yuborildi",
+    "ishchi_qabul_qildi": "✅ Ishchi qabul qildi",
+    "yo'lda": "🚗 Yo‘lda",
+    "yo‘lda": "🚗 Yo‘lda",
+    "yetib_keldi": "📍 Yetib keldi",
+    "yuvish_boshlandi": "🧼 Yuvish boshlandi",
+    "yakunlanmoqda": "📸 Yakunlanmoqda",
+    "yakunlandi": "🎉 Yakunlandi",
+    "bekor_qilindi": "🚫 Bekor qilindi",
+}
+
+
+async def build_customer_history_report(
+    session: AsyncSession,
+    start: datetime,
+    end: datetime,
+) -> list[str]:
+    orders = list(
+        (
+            await session.execute(
+                select(Order, User)
+                .join(User, User.telegram_id == Order.customer_id)
+                .where(Order.created_at >= start, Order.created_at < end)
+                .order_by(Order.created_at, Order.id)
+            )
+        ).all()
+    )
+    cancellations = list(
+        (
+            await session.execute(
+                select(Cancellation, Order, User)
+                .join(Order, Cancellation.order_id == Order.id)
+                .join(User, User.telegram_id == Order.customer_id)
+                .where(
+                    Cancellation.cancelled_at >= start,
+                    Cancellation.cancelled_at < end,
+                )
+                .order_by(Cancellation.cancelled_at, Cancellation.id)
+            )
+        ).all()
+    )
+
+    customer_orders: dict[int, list[tuple[Order, User]]] = {}
+    customers: dict[int, User] = {}
+    for order, customer in orders:
+        customers[customer.telegram_id] = customer
+        customer_orders.setdefault(customer.telegram_id, []).append((order, customer))
+    cancellations_by_customer: dict[int, int] = {}
+    for _cancellation, _order, customer in cancellations:
+        customers[customer.telegram_id] = customer
+        cancellations_by_customer[customer.telegram_id] = (
+            cancellations_by_customer.get(customer.telegram_id, 0) + 1
+        )
+    unique_customers = len(customers)
+    completed_count = sum(order.status == "yakunlandi" for order, _ in orders)
+    cancelled_customer_ids = {customer.telegram_id for _, _, customer in cancellations}
+    period_end = end - timedelta(microseconds=1)
+    header = (
+        "<b>👥 RYX WASH MIJOZLAR TARIXI</b>\n\n"
+        f"<b>Davr:</b> {start.astimezone(TASHKENT):%d.%m.%Y} — "
+        f"{period_end.astimezone(TASHKENT):%d.%m.%Y}\n\n"
+        f"<b>👤 Unikal mijozlar:</b> {unique_customers} ta\n"
+        f"<b>🧾 Jami buyurtmalar:</b> {len(orders)} ta\n"
+        f"<b>🎉 Yakunlangan:</b> {completed_count} ta\n"
+        f"<b>🚫 Bekor qilingan:</b> {len(cancellations)} ta\n"
+        f"<b>⚠️ Bekor qilgan mijozlar:</b> "
+        f"{len(cancelled_customer_ids)} ta"
+    )
+    detail_lines: list[str] = []
+    if not orders and not cancellations:
+        detail_lines.append(
+            "\n<i>Bu davrda mijozlar yoki buyurtmalar topilmadi.</i>"
+        )
+    else:
+        detail_lines.append("\n<b>📋 Mijozlar va buyurtmalar:</b>")
+        for customer_id, customer in customers.items():
+            customer_orders_list = customer_orders.get(customer_id, [])
+            detail_lines.extend(
+                [
+                    "",
+                    f"<b>👤 {_safe(customer.name or 'Nomsiz mijoz')}</b>",
+                    f"📞 {_safe(customer.phone or 'Telefon ko‘rsatilmagan')} | "
+                    f"Yangi buyurtmalar: {len(customer_orders_list)} ta | "
+                    f"Bekor qilishlar: "
+                    f"{cancellations_by_customer.get(customer_id, 0)} ta",
+                ]
+            )
+            if not customer_orders_list:
+                detail_lines.append(
+                    "  <i>Davrda yangi order yo‘q; cancellation faolligi mavjud.</i>"
+                )
+            for order, _ in customer_orders_list:
+                created_at = order.created_at
+                date_label = (
+                    created_at.astimezone(TASHKENT).strftime("%d.%m %H:%M")
+                    if created_at
+                    else "—"
+                )
+                detail_lines.append(
+                    f"  • #{order.id} {date_label} — "
+                    f"{_safe(order.car_model)} | "
+                    f"{_safe(order.plate_number or 'Raqam kiritilmagan')} | "
+                    f"{_money(Decimal(order.car_price))} | "
+                    f"{_safe(CUSTOMER_STATUS_LABELS.get(order.status, order.status))}"
+                )
+    if cancellations:
+        detail_lines.append("\n<b>🚫 Bekor qilingan buyurtmalar:</b>")
+        for cancellation, order, customer in cancellations:
+            cancelled_at = cancellation.cancelled_at.astimezone(TASHKENT)
+            detail_lines.extend(
+                [
+                f"• {_safe(customer.name or 'Nomsiz mijoz')} | "
+                f"{_safe(customer.phone or 'Telefon ko‘rsatilmagan')}",
+                f"  {_safe(order.car_model)} | "
+                f"{_safe(order.plate_number or 'Raqam kiritilmagan')} | "
+                f"{cancelled_at:%d.%m.%Y %H:%M}",
+                f"  Sabab: {_safe_summary(cancellation.reason)}",
+                ]
+            )
+
+    chunks: list[str] = []
+    current = header
+    for line in detail_lines:
+        if len(current) + len(line) + 1 > 3800:
+            chunks.append(current)
+            current = "<b>👥 Mijozlar tarixi davomi</b>\n" + line
         else:
             current += "\n" + line
     chunks.append(current)

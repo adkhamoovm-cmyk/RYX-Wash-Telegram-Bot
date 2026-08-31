@@ -28,6 +28,7 @@ def director_menu_keyboard() -> ReplyKeyboardMarkup:
     builder.add(KeyboardButton(text="📉 Xarajat qo'shish"))
     builder.add(KeyboardButton(text="🧾 Xarajatlarni boshqarish"))
     builder.add(KeyboardButton(text="📊 Hisobot"))
+    builder.add(KeyboardButton(text="👥 Mijozlar tarixi"))
     builder.add(KeyboardButton(text="🗂️ Mijozlar bazasi"))
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
@@ -98,7 +99,24 @@ def report_period_keyboard():
     builder.button(text="📅 Shu oy", callback_data="report_period:month")
     builder.button(text="📅 3 oy", callback_data="report_period:3months")
     builder.button(text="📅 6 oy", callback_data="report_period:6months")
+    builder.button(text="📅 12 oy", callback_data="report_period:12months")
     builder.button(text="🗓️ Sana oralig'i", callback_data="report_period:custom")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def customer_history_period_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📅 1 kun", callback_data="customer_history_period:today")
+    builder.button(text="📅 1 hafta", callback_data="customer_history_period:week")
+    builder.button(text="📅 1 oy", callback_data="customer_history_period:month")
+    builder.button(text="📅 3 oy", callback_data="customer_history_period:3months")
+    builder.button(text="📅 6 oy", callback_data="customer_history_period:6months")
+    builder.button(text="📅 12 oy", callback_data="customer_history_period:12months")
+    builder.button(
+        text="🗓️ Sana oralig'i",
+        callback_data="customer_history_period:custom",
+    )
     builder.adjust(2)
     return builder.as_markup()
 
