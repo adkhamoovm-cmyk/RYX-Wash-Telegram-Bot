@@ -23,6 +23,7 @@ from ryx_wash_bot.scheduler import (
     configure_wash_timer_runtime,
     expire_wash_timeout,
 )
+from ryx_wash_bot.states import ManualOrderStates
 from ryx_wash_bot import worker_handlers
 
 
@@ -473,6 +474,51 @@ def test_manual_visit_time_requires_a_future_tashkent_time():
     assert _parse_manual_visit_time("13:15", now=now) is None
     assert _parse_manual_visit_time("25:00", now=now) is None
     assert _parse_manual_visit_time("17:60", now=now) is None
+
+
+def test_manual_order_requests_payment_and_visit_time_before_location():
+    async def scenario():
+        engine, sessions, settings, scheduler, router = await make_context()
+        try:
+            bot = RecordingBot()
+            state = RecordingState(
+                {
+                    "cars": [
+                        {
+                            "car_category": "Sedan",
+                            "car_model": "Test",
+                            "car_price": 100_000,
+                            "plate_number": None,
+                            "color": None,
+                        }
+                    ]
+                }
+            )
+
+            finish_callback = RecordingCallback(
+                "manual_finish_cars", DIRECTOR_ID, bot
+            )
+            await handler(router, "callback_query", "finish_manual_cars")(
+                finish_callback, state
+            )
+            assert state.states[-1] == ManualOrderStates.waiting_payment
+            assert "To'lov usulini tanlang" in str(
+                finish_callback.message.answer_calls[-1][0]
+            )
+
+            payment_callback = RecordingCallback(
+                "payment:Karta", DIRECTOR_ID, bot
+            )
+            await handler(router, "callback_query", "manual_payment")(
+                payment_callback, state
+            )
+            assert state.states[-1] == ManualOrderStates.waiting_visit_time
+            assert state.data["payment_method"] == "Karta"
+            assert "HH:MM" in str(payment_callback.message.answer_calls[-1][0])
+        finally:
+            await engine.dispose()
+
+    run(scenario())
 
 
 def test_start_shift_recovers_stale_busy_status_without_active_order():

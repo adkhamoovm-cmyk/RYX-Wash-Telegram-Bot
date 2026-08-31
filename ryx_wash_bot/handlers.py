@@ -1600,13 +1600,12 @@ def _new_router(
         if not data.get("cars"):
             await callback.answer("⚠️ Avval mashina qo'shing.", show_alert=True)
             return
-        await state.set_state(ManualOrderStates.waiting_location)
+        await state.set_state(ManualOrderStates.waiting_payment)
         await callback.answer()
         await callback.message.edit_text("Mashinalar tanlandi.")
         await callback.message.answer(
-            "Lokatsiyani Telegram tugmasi orqali yuboring yoki manzilni "
-            "matn qilib yozish variantini tanlang:",
-            reply_markup=manual_location_keyboard(),
+            "💳 To'lov usulini tanlang:",
+            reply_markup=payment_keyboard(),
         )
 
     @router.callback_query(
