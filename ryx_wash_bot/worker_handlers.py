@@ -24,7 +24,7 @@ from .keyboards import (
     group_workers_keyboard,
     new_order_assignment_keyboard,
     no_available_workers_keyboard,
-    wash_duration_keyboard,
+    order_share_keyboard,
     queue_offer_decision_keyboard,
     worker_cabinet_period_keyboard,
     worker_deactivate_confirm_keyboard,
@@ -34,12 +34,11 @@ from .keyboards import (
     worker_payment_keyboard,
     worker_status_keyboard,
 )
-from .models import Cancellation, Order, User, Worker
+from .models import Cancellation, Order, User, Worker, WorkerAdditionalIncome, Expense
 from .reports import period_bounds
 from .scheduler import (
     configure_worker_available_handler,
     remove_wash_timeout,
-    schedule_wash_timeout,
 )
 from .states import (
     CancellationStates,
@@ -151,7 +150,7 @@ def _register_user_routes(
                 select(Order)
                 .where(
                     Order.worker_id == message.from_user.id,
-                    Order.status.in_({"yo'lda", "yakunlanmoqda"}),
+                    Order.status.in_(ACTIVE_ACCEPTED_STATUSES),
                 )
                 .order_by(Order.created_at, Order.id)
                 .limit(1)
@@ -161,11 +160,26 @@ def _register_user_routes(
 
         await state.clear()
         await state.update_data(order_id=order.id)
-        if order.status == "yo'lda" and order.arrival_eta_minutes is None:
-            await state.set_state(WorkerOrderStates.waiting_arrival_eta)
+        if order.status in {"ishchi_qabul_qildi", "yo'lda"}:
             await message.answer(
-                f"⏱ Buyurtma #{order.id} uchun taxminiy yetib borish "
-                "vaqtini butun daqiqalarda kiriting (1–1440):"
+                f"📋 Buyurtma #{order.id} davom etmoqda.",
+                reply_markup=worker_status_keyboard(order.id, "arrived"),
+            )
+            return True
+        if order.status in {"yetib_keldi", "yuvish_boshlandi"}:
+            if order.arrived_at is None:
+                async with sessions() as session:
+                    persisted = await session.get(Order, order.id, with_for_update=True)
+                    if persisted and persisted.arrived_at is None:
+                        persisted.arrived_at = (
+                            persisted.washing_started_at
+                            or persisted.route_started_at
+                            or now_tashkent()
+                        )
+                        await session.commit()
+            await message.answer(
+                f"📋 Buyurtma #{order.id} davom etmoqda.",
+                reply_markup=worker_status_keyboard(order.id, "complete"),
             )
             return True
         if order.status != "yakunlanmoqda":
@@ -224,17 +238,58 @@ def _register_user_routes(
                 Order.completed_at >= start,
                 Order.completed_at < end,
             )
-            washed_count = await session.scalar(
-                select(func.count(Order.id)).where(*order_filter)
+            completed_orders = list(
+                (
+                    await session.scalars(select(Order).where(*order_filter))
+                ).all()
             )
-            total_revenue = await session.scalar(
-                select(func.coalesce(func.sum(Order.car_price), 0)).where(
-                    *order_filter
+            washed_count = len(completed_orders)
+            total_revenue = sum(
+                (Decimal(order.car_price) for order in completed_orders), Decimal("0")
+            )
+            earnings = Decimal("0")
+            for order in completed_orders:
+                if order.worker_share_type == "none":
+                    continue
+                if order.worker_share_amount is not None:
+                    earnings += Decimal(order.worker_share_amount)
+                elif order.worker_share_type == "amount" and order.worker_share_value is not None:
+                    earnings += Decimal(order.worker_share_value)
+                elif order.worker_share_type == "percent" and order.worker_share_value is not None:
+                    earnings += Decimal(order.car_price) * Decimal(order.worker_share_value) / Decimal("100")
+                # Pre-upgrade orders are backfilled once during startup. A
+                # missing snapshot must never be recomputed from a worker's
+                # mutable current percentage.
+            additional = list(
+                (
+                    await session.scalars(
+                        select(WorkerAdditionalIncome)
+                        .where(
+                            WorkerAdditionalIncome.worker_id == worker_id,
+                            WorkerAdditionalIncome.occurred_at >= start,
+                            WorkerAdditionalIncome.occurred_at < end,
+                        )
+                        .order_by(WorkerAdditionalIncome.occurred_at.desc())
+                    )
+                ).all()
+            )
+            worker_expense = await session.scalar(
+                select(func.coalesce(func.sum(Expense.amount), 0)).where(
+                    Expense.worker_id == worker_id,
+                    Expense.spent_at >= start,
+                    Expense.spent_at < end,
                 )
             )
-            earnings = Decimal(str(total_revenue or 0)) * Decimal(
-                worker.share_percent
-            ) / Decimal("100")
+            additional_gross = sum(
+                (Decimal(item.amount) for item in additional), Decimal("0")
+            )
+            additional_earnings = sum(
+                (Decimal(item.worker_amount) for item in additional), Decimal("0")
+            )
+            worker_profit = (
+                total_revenue + additional_gross - earnings
+                - additional_earnings - Decimal(str(worker_expense or 0))
+            )
             recent_orders = list(
                 (
                     await session.scalars(
@@ -281,6 +336,14 @@ def _register_user_routes(
             f"<b>🧼 Yuvilgan mashinalar:</b> {washed_count or 0} ta",
             f"<b>💰 Ishlab topgan summa:</b> "
             f"{_safe(format_price(int(earnings)))}",
+            f"<b>➕ Qo‘shimcha daromad:</b> "
+            f"{_safe(format_price(int(sum((Decimal(item.amount) for item in additional), Decimal('0')))))}",
+            f"<b>➕ Qo‘shimcha ulush:</b> "
+            f"{_safe(format_price(int(sum((Decimal(item.worker_amount) for item in additional), Decimal('0')))))}",
+            f"<b>📉 Worker xarajati:</b> "
+            f"{_safe(format_price(int(Decimal(str(worker_expense or 0)))))}",
+            f"<b>💰 Worker foydasi:</b> "
+            f"{_safe(format_price(int(worker_profit)))}",
             "",
             f"<b>🕒 Joriy smena:</b> "
             f"{'ishda' if is_at_work else 'ishda emas'}",
@@ -299,7 +362,16 @@ def _register_user_routes(
                     f"• {order_date:%d.%m.%Y} | "
                     f"{_safe(order.car_model)} | "
                     f"{_safe(_plate_display(order.plate_number))} | "
-                    f"{_safe(format_price(int(order.car_price)))}"
+                    f"{_safe(format_price(int(order.car_price)))} | "
+                    f"⏱ {_safe(_duration_text(order.arrived_at, order.completed_at))}"
+                )
+        if additional:
+            lines.extend(["", "<b>➕ Qo‘shimcha daromadlar:</b>"])
+            for item in additional[:10]:
+                lines.append(
+                    f"• {_safe(item.description)} — "
+                    f"{_safe(format_price(int(item.amount)))} | "
+                    f"worker ulushi: {_safe(format_price(int(item.worker_amount)))}"
                 )
         return "\n".join(lines)
 
@@ -341,7 +413,6 @@ def _register_user_routes(
             logger.exception("Could not notify customer %s", customer_id)
 
     def worker_offer_text(order: Order) -> str:
-        wash_duration = order.wash_duration_minutes or 60
         visit_line = (
             f"<b>🕔 Mijoz manziliga borish vaqti:</b> "
             f"{_safe(_format_visit_at(order.visit_at))}\n"
@@ -353,7 +424,6 @@ def _register_user_routes(
             f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
             f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n\n"
             f"{visit_line}"
-            f"🧼 Yuvish uchun vaqt: <b>{wash_duration} daqiqa</b>\n\n"
             "📥 Buyurtmani qabul qilasizmi?"
         )
 
@@ -417,7 +487,6 @@ def _register_user_routes(
                     sibling.group_mode = "single"
                     sibling_count += 1
             customer = await session.get(User, order.customer_id)
-            wash_duration = order.wash_duration_minutes or 60
             visit_line = (
                 f"<b>🕔 Mijoz manziliga borish vaqti:</b> "
                 f"{_safe(_format_visit_at(order.visit_at))}\n"
@@ -433,7 +502,6 @@ def _register_user_routes(
                 f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
                 f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
                 f"{visit_line}"
-                f"🧼 Yuvish uchun vaqt: <b>{wash_duration} daqiqa</b>\n"
                 f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
                 f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}\n\n"
                 "Buyurtmani qabul qilasizmi?"
@@ -516,6 +584,158 @@ def _register_user_routes(
         )
 
     configure_worker_available_handler(offer_next_queued_order)
+
+    def _share_snapshot(
+        price: Decimal, share_type: str, share_value: Decimal | None
+    ) -> tuple[Decimal, Decimal]:
+        if share_type not in {"percent", "amount", "none"}:
+            raise ValueError("invalid share type")
+        value = share_value or Decimal("0")
+        if value < 0 or (share_type == "percent" and value > 100):
+            raise ValueError("invalid share value")
+        amount = (
+            price * value / Decimal("100")
+            if share_type == "percent"
+            else value if share_type == "amount" else Decimal("0")
+        ).quantize(Decimal("0.01"))
+        if amount > price:
+            raise ValueError("share exceeds order price")
+        return value.quantize(Decimal("0.01")), amount
+
+    async def assign_order_with_share(
+        order_id: int,
+        worker_id: int,
+        share_type: str,
+        share_value: Decimal | None,
+        bot,
+        *,
+        group: bool = False,
+    ) -> bool:
+        async with sessions() as session:
+            lead = await session.get(Order, order_id, with_for_update=True)
+            if not lead:
+                return False
+            worker = await session.get(Worker, worker_id, with_for_update=True)
+            if (
+                not worker
+                or not worker.active
+                or worker.status not in {"bo'sh", "band"}
+            ):
+                return False
+            now = now_tashkent()
+            free = worker.status == "bo'sh"
+
+            if group:
+                if not lead.order_group_id:
+                    return False
+                orders = list(
+                    (
+                        await session.scalars(
+                            select(Order)
+                            .where(Order.order_group_id == lead.order_group_id)
+                            .order_by(Order.id)
+                            .with_for_update()
+                        )
+                    ).all()
+                )
+                if not orders or any(
+                    order.status not in {"yangi", "navbatda"}
+                    or order.worker_id is not None
+                    for order in orders
+                ):
+                    return False
+                try:
+                    snapshots = [
+                        _share_snapshot(
+                            Decimal(order.car_price), share_type, share_value
+                        )
+                        for order in orders
+                    ]
+                except ValueError:
+                    return False
+                for index, order in enumerate(orders):
+                    value, amount = snapshots[index]
+                    order.worker_id = worker_id
+                    order.worker_share_type = share_type
+                    order.worker_share_value = value
+                    order.worker_share_amount = amount
+                    order.group_mode = "single"
+                    order.queue_offer_worker_id = None
+                    order.queue_prompted_at = None
+                    order.assigned_at = now if free and index == 0 else None
+                    order.status = (
+                        "ishchiga_yuborildi" if free and index == 0 else "navbatda"
+                    )
+                    order.queued_offer = not (free and index == 0)
+                if free:
+                    worker.status = "band"
+                offer_order = orders[0]
+                queued_count = len(orders)
+            else:
+                if lead.worker_id is not None or lead.status not in {"yangi", "navbatda"}:
+                    return False
+                try:
+                    value, amount = _share_snapshot(
+                        Decimal(lead.car_price), share_type, share_value
+                    )
+                except ValueError:
+                    return False
+                order_claim = await session.execute(
+                    update(Order)
+                    .where(
+                        Order.id == order_id,
+                        Order.worker_id.is_(None),
+                        Order.status.in_({"yangi", "navbatda"}),
+                    )
+                    .values(
+                        worker_id=worker_id,
+                        worker_share_type=share_type,
+                        worker_share_value=value,
+                        worker_share_amount=amount,
+                        queue_offer_worker_id=None,
+                        queue_prompted_at=None,
+                        assigned_at=now if free else None,
+                        status="ishchiga_yuborildi" if free else "navbatda",
+                        queued_offer=not free,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                if order_claim.rowcount != 1:
+                    await session.rollback()
+                    return False
+                if free:
+                    worker_claim = await session.execute(
+                        update(Worker)
+                        .where(
+                            Worker.user_id == worker_id,
+                            Worker.active.is_(True),
+                            Worker.status == "bo'sh",
+                        )
+                        .values(status="band")
+                        .execution_options(synchronize_session=False)
+                    )
+                    if worker_claim.rowcount != 1:
+                        await session.rollback()
+                        return False
+                offer_order = await session.get(Order, order_id)
+                if offer_order is None:
+                    await session.rollback()
+                    return False
+                queued_count = 1
+
+            await session.commit()
+        if free:
+            await bot.send_message(
+                worker_id,
+                worker_offer_text(offer_order),
+                reply_markup=worker_order_decision_keyboard(offer_order.id),
+            )
+        else:
+            await bot.send_message(
+                worker_id,
+                f"📋 Sizda navbatda yana {queued_count} ta buyurtma bor.",
+            )
+        return True
 
     @router.callback_query(F.data.startswith("group_single:"))
     async def choose_single_worker_for_group(callback: CallbackQuery) -> None:
@@ -623,9 +843,9 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            "🧼 Mashinani yuvish uchun vaqtni tanlang:",
-            reply_markup=wash_duration_keyboard(
-                "group_worker_wash_duration", lead_order_id, worker_id
+            "👷 Worker ulushini tanlang:",
+            reply_markup=order_share_keyboard(
+                lead_order_id, worker_id, prefix="group_share"
             ),
         )
 
@@ -633,6 +853,11 @@ def _register_user_routes(
     async def assign_group_to_worker_with_wash_duration(
         callback: CallbackQuery,
     ) -> None:
+        await callback.answer(
+            "❌ Eski yuvish-vaqti tugmasi eskirgan. Ulush tanlashdan foydalaning.",
+            show_alert=True,
+        )
+        return
         parts = _callback_parts(callback.data, "group_worker_wash_duration", 3)
         if parts is None:
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
@@ -713,8 +938,7 @@ def _register_user_routes(
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer()
         await callback.message.answer(
-            f"✅ Guruhdagi {len(orders)} ta mashina {worker_name} ga biriktirildi.\n"
-            f"🧼 Yuvish uchun vaqt: {wash_duration} daqiqa."
+            f"✅ Guruhdagi {len(orders)} ta mashina {worker_name} ga biriktirildi."
         )
 
     @router.callback_query(F.data.startswith("group_split:"))
@@ -1242,14 +1466,19 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            "🧼 Navbatdagi mashinani yuvish uchun vaqtni tanlang:",
-            reply_markup=wash_duration_keyboard(
-                "queue_worker_wash_duration", order_id, worker_id
+            "👷 Worker ulushini tanlang:",
+            reply_markup=order_share_keyboard(
+                order_id, worker_id, prefix="busy_share"
             ),
         )
 
     @router.callback_query(F.data.startswith("queue_worker_wash_duration:"))
     async def assign_to_busy_worker(callback: CallbackQuery) -> None:
+        await callback.answer(
+            "❌ Eski yuvish-vaqti tugmasi eskirgan. Ulush tanlashdan foydalaning.",
+            show_alert=True,
+        )
+        return
         parts = _callback_parts(callback.data, "queue_worker_wash_duration", 3)
         if parts is None:
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
@@ -1314,8 +1543,7 @@ def _register_user_routes(
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer()
         await callback.message.answer(
-            f"Buyurtma #{order_id} {worker_name} uchun navbatga biriktirildi.\n"
-            f"🧼 Yuvish uchun vaqt: {wash_duration} daqiqa."
+            f"Buyurtma #{order_id} {worker_name} uchun navbatga biriktirildi."
         )
 
     @router.callback_query(F.data.startswith("queue_offer:"))
@@ -1410,16 +1638,21 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            "🧼 Mashinani yuvish uchun vaqtni tanlang:",
-            reply_markup=wash_duration_keyboard(
-                "assign_worker_wash_duration", order_id, worker_id
-            ),
+            "👷 Ishchi ulushini tanlang:",
+            reply_markup=order_share_keyboard(order_id, worker_id),
         )
 
     @router.callback_query(F.data.startswith("assign_worker_wash_duration:"))
     async def assign_order(
         callback: CallbackQuery,
+        share_type: str | None = None,
+        share_value: Decimal | None = None,
     ) -> None:
+        await callback.answer(
+            "❌ Eski yuvish-vaqti tugmasi eskirgan. Ulush tanlashdan foydalaning.",
+            show_alert=True,
+        )
+        return
         if not callback.from_user:
             return
         parts = _callback_parts(callback.data, "assign_worker_wash_duration", 3)
@@ -1456,6 +1689,13 @@ def _register_user_routes(
                     assigned_at=assigned_at,
                     status="ishchiga_yuborildi",
                     wash_duration_minutes=wash_duration,
+                    worker_share_type=share_type,
+                    worker_share_value=share_value,
+                    worker_share_amount=(
+                        Order.car_price * share_value / Decimal("100")
+                        if share_type == "percent" and share_value is not None
+                        else share_value if share_type == "amount" else Decimal("0")
+                    ),
                     queued_offer=case(
                         (Order.status == "navbatda", True),
                         else_=False,
@@ -1516,9 +1756,100 @@ def _register_user_routes(
             reply_markup=cancel_only_keyboard(order_id)
         )
         await callback.message.answer(
-            f"Buyurtma #{order_id} {worker_name} ishchiga yuborildi.\n"
-            f"🧼 Yuvish uchun vaqt: {wash_duration} daqiqa."
+            f"Buyurtma #{order_id} {worker_name} ishchiga yuborildi."
         )
+
+    @router.callback_query(F.data.startswith("order_share:"))
+    @router.callback_query(F.data.startswith("group_share:"))
+    @router.callback_query(F.data.startswith("busy_share:"))
+    async def choose_order_share(callback: CallbackQuery, state: FSMContext) -> None:
+        if not callback.from_user:
+            return
+        async with sessions() as session:
+            if not await is_director(session, callback.from_user.id):
+                await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+                return
+        prefix = callback.data.split(":", 1)[0] if isinstance(callback.data, str) else ""
+        parts = _callback_parts(callback.data, prefix, 3)
+        if parts is None:
+            await callback.answer("❌ Tugma ma’lumoti eskirgan.", show_alert=True)
+            return
+        share_type, order_raw, worker_raw = parts
+        order_id = _positive_int(order_raw)
+        worker_id = _positive_int(worker_raw)
+        if share_type not in {"percent", "amount", "none"} or not order_id or not worker_id:
+            await callback.answer("❌ Ulush ma’lumoti noto‘g‘ri.", show_alert=True)
+            return
+        if share_type == "none":
+            if not await assign_order_with_share(
+                order_id,
+                worker_id,
+                "none",
+                Decimal("0"),
+                callback.bot,
+                group=prefix == "group_share",
+            ):
+                await callback.answer("⚠️ Buyurtma holati o‘zgargan.", show_alert=True)
+                return
+            await callback.answer("✅ Ulushsiz yuborildi.")
+            return
+        await state.update_data(
+            assignment_kind=(
+                "group" if prefix == "group_share"
+                else "busy" if prefix == "busy_share"
+                else "direct"
+            ),
+            order_id=order_id,
+            worker_id=worker_id,
+            assignment_share_type=share_type,
+        )
+        await state.set_state(DirectorAssignmentStates.waiting_share_value)
+        await callback.answer()
+        await callback.message.answer(
+            "📊 Worker ulushini foiz yoki summada kiriting:"
+        )
+
+    @router.message(DirectorAssignmentStates.waiting_share_value, F.text)
+    async def receive_order_share_value(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not message.from_user:
+            return
+        async with sessions() as session:
+            if not await is_director(session, message.from_user.id):
+                await state.clear()
+                await message.answer("❌ Bu amal faqat direktor uchun.")
+                return
+        try:
+            value = Decimal(message.text.strip().replace(",", "."))
+        except (InvalidOperation, ValueError):
+            value = None
+        if value is None or value < 0:
+            await message.answer("❌ Musbat foiz yoki summa kiriting.")
+            return
+        data = await state.get_data()
+        if data.get("assignment_share_type") == "percent" and value > 100:
+            await message.answer("❌ Foiz 100 dan oshmasin.")
+            return
+        order_id = data.get("order_id")
+        worker_id = data.get("worker_id")
+        if not isinstance(order_id, int) or not isinstance(worker_id, int):
+            await state.clear()
+            await message.answer("❌ Ulush ma’lumoti topilmadi.")
+            return
+        share_type = data["assignment_share_type"]
+        assignment_kind = data.get("assignment_kind")
+        await state.clear()
+        ok = await assign_order_with_share(
+            order_id,
+            worker_id,
+            share_type,
+            value,
+            message.bot,
+            group=assignment_kind == "group",
+        )
+        if not ok:
+            await message.answer("⚠️ Buyurtma holati o‘zgargan yoki ulush saqlanmadi.")
 
     @router.callback_query(
         F.data.startswith("assign_worker_wash_duration_custom:")
@@ -1683,8 +2014,6 @@ def _register_user_routes(
                 f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
                 f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
                 f"{visit_line}"
-                f"🧼 <b>Yuvish vaqti:</b> "
-                f"{_safe(order.wash_duration_minutes or 60)} daqiqa\n"
                 f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
                 f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
             )
@@ -1706,7 +2035,7 @@ def _register_user_routes(
                 if latitude is not None and longitude is not None
                 else f"Manzil: {_safe(address or '—')}"
             ),
-            reply_markup=worker_status_keyboard(order_id, "route"),
+            reply_markup=worker_status_keyboard(order_id, "arrived"),
         )
         if latitude is not None and longitude is not None:
             await callback.bot.send_location(
@@ -1979,17 +2308,19 @@ def _register_user_routes(
                 return
             timestamp = now_tashkent()
             stage_data = {
+                "arrived": (
+                    "ishchi_qabul_qildi",
+                    "yetib_keldi",
+                    "Manzilga yetib keldi",
+                    "complete",
+                ),
+                # Compatibility for callbacks persisted by older deployments.
+                # These stages are no longer shown in the active keyboard.
                 "route": (
                     "ishchi_qabul_qildi",
                     "yo'lda",
                     "Yo'lga chiqdi",
                     "arrived",
-                ),
-                "arrived": (
-                    "yo'lda",
-                    "yetib_keldi",
-                    "Manzilga yetib keldi",
-                    "washing",
                 ),
                 "washing": (
                     "yetib_keldi",
@@ -2000,28 +2331,33 @@ def _register_user_routes(
             }
             if stage not in stage_data:
                 if stage == "complete":
-                    if order.status != "yuvish_boshlandi":
+                    if order.status not in {"yetib_keldi", "yuvish_boshlandi"}:
                         await callback.answer(
                             "Statuslarni ketma-ket yangilang.", show_alert=True
                         )
                         return
+                    if order.arrived_at is None:
+                        order.arrived_at = (
+                            order.washing_started_at
+                            or order.route_started_at
+                            or timestamp
+                        )
                     order.status = "yakunlanmoqda"
                     await session.commit()
-                    remove_wash_timeout(scheduler, order_id)
                     await state.set_state(WorkerCompletionStates.waiting_before_photo)
                     await state.update_data(order_id=order_id)
                     await callback.message.edit_reply_markup(reply_markup=None)
                     if not order.plate_number:
                         await state.set_state(WorkerOrderStates.waiting_plate)
                         await callback.message.answer(
-                            "✅ Yuvish tugadi. Endi mashinaning davlat raqamini "
+                            "✅ Ish yakunlandi. Endi mashinaning davlat raqamini "
                             "kiriting:",
                             reply_markup=ReplyKeyboardRemove(),
                         )
                     elif not order.payment_method:
                         await state.set_state(WorkerOrderStates.waiting_payment)
                         await callback.message.answer(
-                            "✅ Yuvish tugadi. Mijoz oldidagi to‘lov turini "
+                            "✅ Ish yakunlandi. Mijoz oldidagi to‘lov turini "
                             "tanlang:",
                             reply_markup=worker_payment_keyboard(order_id),
                         )
@@ -2036,40 +2372,29 @@ def _register_user_routes(
                 return
 
             expected_status, new_status, notice, next_stage = stage_data[stage]
-            if order.status != expected_status:
+            expected_statuses = (
+                {"ishchi_qabul_qildi", "yo'lda"}
+                if stage == "arrived"
+                else {expected_status}
+            )
+            if order.status not in expected_statuses:
                 await callback.answer(
                     "Statuslarni ketma-ket yangilang.", show_alert=True
                 )
                 return
-            if stage == "route":
-                order.status = new_status
-                order.route_started_at = timestamp
-                worker_name = worker.name
-                model = order.car_model
-                plate = order.plate_number
-                await session.commit()
-                await state.set_state(WorkerOrderStates.waiting_arrival_eta)
-                await state.update_data(order_id=order_id)
-                await callback.message.edit_reply_markup(reply_markup=None)
-                await callback.message.answer(
-                    "🚗 Yo'lga chiqqaningiz belgilandi.\n"
-                    "⏱ Mijozga ko'rsatish uchun taxminiy yetib borish "
-                    "vaqtini butun daqiqalarda kiriting (1–1440):"
-                )
-                await callback.answer()
-                return
             order.status = new_status
-            wash_duration = None
             if stage == "route":
                 order.route_started_at = timestamp
             elif stage == "arrived":
                 order.arrived_at = timestamp
             elif stage == "washing":
                 order.washing_started_at = timestamp
-                wash_duration = order.wash_duration_minutes or 60
             await session.commit()
             model = order.car_model
             plate = order.plate_number
+            if stage == "route":
+                await state.set_state(WorkerOrderStates.waiting_arrival_eta)
+                await state.update_data(order_id=order_id)
         await callback.bot.send_message(
             settings.director_id,
             f"<b>{_safe(worker.name)}</b> | {_safe(model)} | "
@@ -2078,17 +2403,6 @@ def _register_user_routes(
         await callback.message.edit_reply_markup(
             reply_markup=worker_status_keyboard(order_id, next_stage)
         )
-        if stage == "washing":
-            schedule_wash_timeout(
-                scheduler,
-                order_id,
-                timestamp,
-                duration_minutes=wash_duration or 60,
-            )
-            await callback.message.answer(
-                f"🧼 Yuvish boshlandi. Ajratilgan vaqt: "
-                f"<b>{wash_duration or 60} daqiqa</b>."
-            )
         if stage == "arrived":
             async with sessions() as session:
                 order = await session.get(Order, order_id)
@@ -2414,7 +2728,7 @@ def _register_user_routes(
             order.completed_at = completed_at
             order.worker_comment = comment
             worker.status = "bo'sh"
-            duration = _duration_text(order.washing_started_at, completed_at)
+            duration = _duration_text(order.arrived_at, completed_at)
             report = (
                  f"<b>📊 Yakuniy hisobot | Buyurtma #{order.id}</b>\n\n"
                  f"<b>👷 Ishchi:</b> {_safe(worker.name)}\n"

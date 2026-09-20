@@ -52,6 +52,42 @@ async def create_tables(engine: AsyncEngine) -> None:
                     ADD COLUMN IF NOT EXISTS order_group_id VARCHAR(36),
                     ADD COLUMN IF NOT EXISTS group_mode VARCHAR(20),
                     ADD COLUMN IF NOT EXISTS wash_duration_minutes INTEGER NOT NULL DEFAULT 60
+                    ,ADD COLUMN IF NOT EXISTS worker_share_type VARCHAR(10)
+                    ,ADD COLUMN IF NOT EXISTS worker_share_value NUMERIC(12,2)
+                    ,ADD COLUMN IF NOT EXISTS worker_share_amount NUMERIC(12,2)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                ALTER TABLE expenses
+                    ADD COLUMN IF NOT EXISTS worker_id BIGINT REFERENCES workers(user_id)
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS worker_additional_income (
+                    id SERIAL PRIMARY KEY,
+                    worker_id BIGINT NOT NULL REFERENCES workers(user_id),
+                    description TEXT NOT NULL,
+                    amount NUMERIC(12,2) NOT NULL,
+                    share_type VARCHAR(10) NOT NULL,
+                    share_value NUMERIC(12,2) NOT NULL,
+                    worker_amount NUMERIC(12,2) NOT NULL,
+                    occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    created_by BIGINT NOT NULL REFERENCES users(telegram_id)
+                )
+                """
+            )
+        )
+        await connection.execute(
+            text(
+                """
+                CREATE INDEX IF NOT EXISTS ix_worker_additional_income_worker
+                    ON worker_additional_income(worker_id, occurred_at)
                 """
             )
         )
@@ -195,6 +231,26 @@ async def create_tables(engine: AsyncEngine) -> None:
                             RENAME COLUMN cancelled_at TO vaqt;
                     END IF;
                 END $$;
+                """
+            )
+        )
+        # Freeze the payout that legacy assigned orders previously derived from
+        # the worker's mutable percentage. This is idempotent and deliberately
+        # runs after the legacy worker-column compatibility block above.
+        await connection.execute(
+            text(
+                """
+                UPDATE orders AS orders_to_snapshot
+                SET worker_share_type = 'percent',
+                    worker_share_value = workers.foiz,
+                    worker_share_amount = ROUND(
+                        orders_to_snapshot.car_price * workers.foiz / 100,
+                        2
+                    )
+                FROM workers
+                WHERE orders_to_snapshot.worker_id = workers.user_id
+                  AND orders_to_snapshot.worker_share_type IS NULL
+                  AND orders_to_snapshot.worker_share_amount IS NULL
                 """
             )
         )

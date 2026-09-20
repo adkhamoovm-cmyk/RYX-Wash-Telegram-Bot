@@ -30,8 +30,32 @@ def director_menu_keyboard() -> ReplyKeyboardMarkup:
     builder.add(KeyboardButton(text="📊 Hisobot"))
     builder.add(KeyboardButton(text="👥 Mijozlar tarixi"))
     builder.add(KeyboardButton(text="🗂️ Mijozlar bazasi"))
+    builder.add(KeyboardButton(text="➕ Qo‘shimcha daromad"))
+    builder.add(KeyboardButton(text="👥 Operatorlarni boshqarish"))
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
+
+
+def operator_menu_keyboard() -> ReplyKeyboardMarkup:
+    builder = ReplyKeyboardBuilder()
+    builder.add(KeyboardButton(text="📝 Qo'lda buyurtma qo'shish"))
+    builder.add(KeyboardButton(text="👥 Mijozlar tarixi"))
+    builder.add(KeyboardButton(text="🗂️ Mijozlar bazasi"))
+    builder.add(KeyboardButton(text="➕ Qo‘shimcha daromad"))
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def operator_management_keyboard(operators: list):
+    builder = InlineKeyboardBuilder()
+    for operator in operators:
+        builder.button(
+            text=f"🧑‍💼 {operator.name or operator.telegram_id}"[:60],
+            callback_data=f"operator_remove:{operator.telegram_id}",
+        )
+    builder.button(text="➕ Operator qo‘shish", callback_data="operator_add")
+    builder.adjust(1)
+    return builder.as_markup()
 
 
 def price_management_keyboard():
@@ -64,7 +88,8 @@ def expense_items_keyboard(expenses: list):
         date_text = expense.spent_at.strftime("%d.%m.%Y")
         label = (
             f"{date_text} | {format_price(int(expense.amount))} | "
-            f"{expense.description}"
+            f"{expense.description} | "
+            f"{'Umumiy' if expense.worker_id is None else f'Worker #{expense.worker_id}'}"
         )
         builder.button(
             text=f"✏️ {label}"[:60],
@@ -75,6 +100,18 @@ def expense_items_keyboard(expenses: list):
             callback_data=f"expense_delete:{expense.id}",
         )
     builder.adjust(2)
+    return builder.as_markup()
+
+
+def expense_owner_keyboard(workers: list):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🏢 Umumiy xarajat", callback_data="expense_owner:general")
+    for worker in workers:
+        builder.button(
+            text=f"👷 {worker.name}"[:60],
+            callback_data=f"expense_owner:worker:{worker.user_id}",
+        )
+    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -130,6 +167,25 @@ def report_workers_keyboard(workers: list):
             callback_data=f"report_worker:{worker.user_id}",
         )
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def additional_income_workers_keyboard(workers: list):
+    builder = InlineKeyboardBuilder()
+    for worker in workers:
+        builder.button(
+            text=f"👷 {worker.name}"[:60],
+            callback_data=f"additional_income_worker:{worker.user_id}",
+        )
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def additional_income_share_keyboard():
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📊 Foiz", callback_data="additional_income_share:percent")
+    builder.button(text="💵 Aniq summa", callback_data="additional_income_share:amount")
+    builder.adjust(2)
     return builder.as_markup()
 
 
@@ -453,9 +509,7 @@ def worker_order_decision_keyboard(order_id: int):
 
 def worker_status_keyboard(order_id: int, next_stage: str):
     labels = {
-        "route": "🚗💨 Yo'lga chiqdim",
         "arrived": "📍 Manzilga yetib keldim",
-        "washing": "🧼 Yuvish boshlandi",
         "complete": "🏁 Ish yakunlandi",
     }
     builder = InlineKeyboardBuilder()
@@ -468,6 +522,15 @@ def worker_status_keyboard(order_id: int, next_stage: str):
         callback_data=f"cancel_order:{order_id}",
     )
     builder.adjust(1)
+    return builder.as_markup()
+
+
+def order_share_keyboard(order_id: int, worker_id: int, prefix: str = "order_share"):
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📊 Foiz", callback_data=f"{prefix}:percent:{order_id}:{worker_id}")
+    builder.button(text="💵 Aniq summa", callback_data=f"{prefix}:amount:{order_id}:{worker_id}")
+    builder.button(text="⏭️ Ulushsiz", callback_data=f"{prefix}:none:{order_id}:{worker_id}")
+    builder.adjust(2, 1)
     return builder.as_markup()
 
 

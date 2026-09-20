@@ -14,6 +14,7 @@ class PriceManagementStates(StatesGroup):
 
 
 class ExpenseStates(StatesGroup):
+    waiting_owner = State()
     waiting_amount = State()
     waiting_description = State()
     waiting_edit_amount = State()
@@ -66,6 +67,17 @@ class WorkerOrderStates(StatesGroup):
 
 class DirectorAssignmentStates(StatesGroup):
     waiting_custom_wash_duration = State()
+    waiting_share_value = State()
+
+
+class AdditionalIncomeStates(StatesGroup):
+    waiting_description = State()
+    waiting_amount = State()
+    waiting_share_value = State()
+
+
+class OperatorStates(StatesGroup):
+    waiting_user_id = State()
 
 
 class WorkerRegistrationStates(StatesGroup):

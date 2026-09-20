@@ -86,6 +86,9 @@ class Expense(Base):
     created_by: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("users.telegram_id"), nullable=False
     )
+    worker_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("workers.user_id"), nullable=True, index=True
+    )
 
 
 class Worker(Base):
@@ -153,6 +156,13 @@ class Order(Base):
     wash_duration_minutes: Mapped[int] = mapped_column(
         Integer, nullable=False, default=60, server_default="60"
     )
+    worker_share_type: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    worker_share_value: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    worker_share_amount: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
     queued_offer: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="false"
     )
@@ -213,3 +223,24 @@ class Cancellation(Base):
     )
 
     order: Mapped[Order] = relationship(back_populates="cancellations")
+
+
+class WorkerAdditionalIncome(Base):
+    __tablename__ = "worker_additional_income"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    worker_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("workers.user_id"), nullable=False, index=True
+    )
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    share_type: Mapped[str] = mapped_column(String(10), nullable=False)
+    share_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    worker_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    created_by: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.telegram_id"), nullable=False
+    )
+    worker: Mapped[Worker] = relationship()

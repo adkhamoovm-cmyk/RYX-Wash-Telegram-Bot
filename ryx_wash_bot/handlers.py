@@ -31,12 +31,17 @@ from .keyboards import (
     category_keyboard,
     contact_keyboard,
     customer_history_period_keyboard,
+    additional_income_share_keyboard,
+    additional_income_workers_keyboard,
     crm_card_keyboard,
     crm_customers_keyboard,
     crm_menu_keyboard,
     customer_menu_keyboard,
     director_menu_keyboard,
+    operator_menu_keyboard,
+    operator_management_keyboard,
     expense_delete_confirm_keyboard,
+    expense_owner_keyboard,
     expense_items_keyboard,
     group_mode_keyboard,
     location_keyboard,
@@ -55,7 +60,7 @@ from .keyboards import (
     skip_comment_keyboard,
     worker_menu_keyboard,
 )
-from .models import CustomerCar, Expense, Order, ServiceModel, User, Worker
+from .models import CustomerCar, Expense, Order, ServiceModel, User, Worker, WorkerAdditionalIncome
 from .reports import (
     build_customer_history_report,
     build_financial_report,
@@ -70,6 +75,8 @@ from .states import (
     ReportStates,
     CrmStates,
     CustomerHistoryStates,
+    AdditionalIncomeStates,
+    OperatorStates,
 )
 from .worker_handlers import register_worker_routes
 
@@ -128,6 +135,10 @@ MAIN_MENU_TEXTS = frozenset(
         "Mijozlar bazasi",
         "👥 Mijozlar tarixi",
         "Mijozlar tarixi",
+        "➕ Qo‘shimcha daromad",
+        "➕ Qo'shimcha daromad",
+        "👥 Operatorlarni boshqarish",
+        "Operatorlarni boshqarish",
         "👤 Mening kabinetim",
         "Mening kabinetim",
         "🟢 Ishga keldim",
@@ -353,6 +364,14 @@ def _new_router(
                     )
                     return
 
+                if user.rol == "operator":
+                    await state.clear()
+                    await message.answer(
+                        "🧑‍💼 Operator paneli.",
+                        reply_markup=operator_menu_keyboard(),
+                    )
+                    return
+
                 if user.rol != "mijoz":
                     await state.clear()
                     await message.answer(
@@ -523,13 +542,33 @@ def _new_router(
             user = await find_user(session, user_id)
             return bool(user and user.rol == "direktor")
 
+    async def staff_allowed(user_id: int) -> bool:
+        async with session_factory() as session:
+            user = await find_user(session, user_id)
+            return bool(user and user.rol in {"direktor", "operator"})
+
     async def require_director_message(
         message: Message,
         state: FSMContext,
     ) -> bool:
+        current_state = await state.get_state()
+        allowed_staff_flow = (
+            current_state
+            and (
+                current_state.startswith("ManualOrderStates:")
+                or current_state.startswith("CustomerHistoryStates:")
+                or current_state.startswith("AdditionalIncomeStates:")
+            )
+        )
         if (
             message.from_user is not None
-            and await director_allowed(message.from_user.id)
+            and (
+                await director_allowed(message.from_user.id)
+                or (
+                    allowed_staff_flow
+                    and await staff_allowed(message.from_user.id)
+                )
+            )
         ):
             return True
         await state.clear()
@@ -658,8 +697,8 @@ def _new_router(
 
     @router.message(F.text.in_({"🗂️ Mijozlar bazasi", "Mijozlar bazasi"}))
     async def open_crm(message: Message, state: FSMContext) -> None:
-        if not await director_allowed(message.from_user.id):
-            await message.answer("❌ Bu bo'lim faqat direktor uchun.")
+        if not await staff_allowed(message.from_user.id):
+            await message.answer("❌ Bu bo'lim faqat direktor yoki operator uchun.")
             return
         await state.clear()
         await message.answer(
@@ -669,8 +708,10 @@ def _new_router(
 
     @router.callback_query(F.data == "crm_menu")
     async def crm_menu(callback: CallbackQuery, state: FSMContext) -> None:
-        if not await director_allowed(callback.from_user.id):
-            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+        if not await staff_allowed(callback.from_user.id):
+            await callback.answer(
+                "Bu amal faqat direktor yoki operator uchun.", show_alert=True
+            )
             return
         await state.clear()
         await callback.answer()
@@ -681,8 +722,10 @@ def _new_router(
 
     @router.callback_query(F.data == "crm_top")
     async def show_crm_top(callback: CallbackQuery, state: FSMContext) -> None:
-        if not await director_allowed(callback.from_user.id):
-            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+        if not await staff_allowed(callback.from_user.id):
+            await callback.answer(
+                "Bu amal faqat direktor yoki operator uchun.", show_alert=True
+            )
             return
         await state.clear()
         rows = await crm_top_customers()
@@ -707,8 +750,10 @@ def _new_router(
     async def start_crm_search(
         callback: CallbackQuery, state: FSMContext
     ) -> None:
-        if not await director_allowed(callback.from_user.id):
-            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+        if not await staff_allowed(callback.from_user.id):
+            await callback.answer(
+                "Bu amal faqat direktor yoki operator uchun.", show_alert=True
+            )
             return
         await state.set_state(CrmStates.waiting_search)
         await callback.answer()
@@ -718,9 +763,9 @@ def _new_router(
 
     @router.message(CrmStates.waiting_search, F.text)
     async def search_crm_customers(message: Message, state: FSMContext) -> None:
-        if not await director_allowed(message.from_user.id):
+        if not await staff_allowed(message.from_user.id):
             await state.clear()
-            await message.answer("❌ Bu bo'lim faqat direktor uchun.")
+            await message.answer("❌ Bu bo'lim faqat direktor yoki operator uchun.")
             return
         search_term = " ".join(message.text.split())
         if len(search_term) < 2:
@@ -760,8 +805,10 @@ def _new_router(
 
     @router.callback_query(F.data.startswith("crm_customer:"))
     async def show_crm_customer(callback: CallbackQuery) -> None:
-        if not await director_allowed(callback.from_user.id):
-            await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
+        if not await staff_allowed(callback.from_user.id):
+            await callback.answer(
+                "Bu amal faqat direktor yoki operator uchun.", show_alert=True
+            )
             return
         try:
             customer_id = int(callback.data.split(":", 1)[1])
@@ -1025,11 +1072,46 @@ def _new_router(
             await message.answer("❌ Bu bo'lim faqat direktor uchun.")
             return
         await state.clear()
-        await state.set_state(ExpenseStates.waiting_amount)
+        async with session_factory() as session:
+            workers = list((await session.scalars(
+                select(Worker).where(Worker.active.is_(True)).order_by(Worker.name)
+            )).all())
+        await state.set_state(ExpenseStates.waiting_owner)
         await message.answer(
-            "💸 Xarajat summasini so'mda kiriting:",
-            reply_markup=ReplyKeyboardRemove(),
+            "📉 Xarajat turini tanlang:",
+            reply_markup=expense_owner_keyboard(workers),
         )
+
+    @router.callback_query(
+        ExpenseStates.waiting_owner, F.data.startswith("expense_owner:")
+    )
+    async def choose_expense_owner(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        parts = callback.data.split(":")
+        if len(parts) == 2 and parts[1] == "general":
+            worker_id = None
+        elif len(parts) == 3 and parts[1] == "worker":
+            try:
+                worker_id = int(parts[2])
+            except ValueError:
+                worker_id = None
+            if worker_id is None:
+                await callback.answer("❌ Tugma ma’lumoti eskirgan.", show_alert=True)
+                return
+            async with session_factory() as session:
+                worker = await session.get(Worker, worker_id)
+                if not worker or not worker.active:
+                    await callback.answer("❌ Worker faol emas.", show_alert=True)
+                    return
+        else:
+            await callback.answer("❌ Tugma ma’lumoti eskirgan.", show_alert=True)
+            return
+        await state.update_data(expense_worker_id=worker_id)
+        await state.set_state(ExpenseStates.waiting_amount)
+        await callback.answer()
+        await callback.message.answer("💸 Xarajat summasini so'mda kiriting:")
 
     @router.message(ExpenseStates.waiting_amount, F.text)
     async def receive_expense_amount(message: Message, state: FSMContext) -> None:
@@ -1066,6 +1148,7 @@ def _new_router(
                     description=description,
                     spent_at=datetime.now(TASHKENT),
                     created_by=message.from_user.id,
+                    worker_id=data.get("expense_worker_id"),
                 )
             )
             await session.commit()
@@ -1385,7 +1468,7 @@ def _new_router(
 
     @router.message(F.text.in_({"👥 Mijozlar tarixi", "Mijozlar tarixi"}))
     async def start_customer_history(message: Message, state: FSMContext) -> None:
-        if not await director_allowed(message.from_user.id):
+        if not await staff_allowed(message.from_user.id):
             await message.answer("❌ Bu bo'lim faqat direktor uchun.")
             return
         await state.clear()
@@ -1399,7 +1482,7 @@ def _new_router(
         callback: CallbackQuery,
         state: FSMContext,
     ) -> None:
-        if not await director_allowed(callback.from_user.id):
+        if not await staff_allowed(callback.from_user.id):
             await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
             return
         period = callback.data.split(":", 1)[1]
@@ -1423,7 +1506,7 @@ def _new_router(
         message: Message,
         state: FSMContext,
     ) -> None:
-        if not await director_allowed(message.from_user.id):
+        if not await staff_allowed(message.from_user.id):
             await state.clear()
             await message.answer("❌ Bu bo'lim faqat direktor uchun.")
             return
@@ -1461,8 +1544,8 @@ def _new_router(
     async def start_manual_order(message: Message, state: FSMContext) -> None:
         async with session_factory() as session:
             director = await find_user(session, message.from_user.id)
-            if not director or director.rol != "direktor":
-                await message.answer("❌ Bu funksiya faqat direktor uchun.")
+            if not director or director.rol not in {"direktor", "operator"}:
+                await message.answer("❌ Bu funksiya faqat direktor yoki operator uchun.")
                 return
         await state.clear()
         await state.set_state(ManualOrderStates.waiting_customer_name)
@@ -2381,6 +2464,232 @@ def _new_router(
             await message.answer("❌ Izoh 2000 belgidan oshmasin. Qaytadan kiriting:")
             return
         await save_and_notify(message, state, comment)
+
+    @router.message(F.text.in_({"➕ Qo‘shimcha daromad", "➕ Qo'shimcha daromad"}))
+    async def start_additional_income(message: Message, state: FSMContext) -> None:
+        if not await staff_allowed(message.from_user.id):
+            await message.answer("❌ Bu amal faqat direktor yoki operator uchun.")
+            return
+        async with session_factory() as session:
+            workers = list(
+                (
+                    await session.scalars(
+                        select(Worker).where(Worker.active.is_(True)).order_by(Worker.name)
+                    )
+                ).all()
+            )
+        if not workers:
+            await message.answer("📭 Faol workerlar topilmadi.")
+            return
+        await state.clear()
+        await message.answer(
+            "👷 Qo‘shimcha daromad olgan worker:",
+            reply_markup=additional_income_workers_keyboard(workers),
+        )
+
+    @router.callback_query(F.data.startswith("additional_income_worker:"))
+    async def choose_additional_income_worker(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not await staff_allowed(callback.from_user.id):
+            await callback.answer("❌ Ruxsat yo‘q.", show_alert=True)
+            return
+        try:
+            worker_id = int(callback.data.split(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer("❌ Tugma ma’lumoti eskirgan.", show_alert=True)
+            return
+        async with session_factory() as session:
+            worker = await session.get(Worker, worker_id)
+        if worker is None or not worker.active:
+            await callback.answer("❌ Worker topilmadi.", show_alert=True)
+            return
+        await state.update_data(worker_id=worker_id)
+        await state.set_state(AdditionalIncomeStates.waiting_description)
+        await callback.answer()
+        await callback.message.answer("📝 Ish tavsifini kiriting (masalan, polirovka):")
+
+    @router.message(AdditionalIncomeStates.waiting_description, F.text)
+    async def receive_additional_income_description(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not await staff_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("❌ Ruxsat yo‘q.")
+            return
+        description = " ".join(message.text.split())
+        if not description or len(description) > 500:
+            await message.answer("❌ Tavsif 1–500 belgi bo‘lishi kerak.")
+            return
+        await state.update_data(description=description)
+        await state.set_state(AdditionalIncomeStates.waiting_amount)
+        await message.answer("💰 Umumiy daromad summasini kiriting:")
+
+    @router.message(AdditionalIncomeStates.waiting_amount, F.text)
+    async def receive_additional_income_amount(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not await staff_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("❌ Ruxsat yo‘q.")
+            return
+        amount = _parse_money(message.text)
+        if amount is None:
+            await message.answer("❌ Musbat summa kiriting.")
+            return
+        await state.update_data(amount=str(amount))
+        await message.answer(
+            "👷 Worker ulushi turini tanlang:",
+            reply_markup=additional_income_share_keyboard(),
+        )
+
+    @router.callback_query(
+        AdditionalIncomeStates.waiting_amount,
+        F.data.startswith("additional_income_share:")
+    )
+    async def choose_additional_income_share(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not await staff_allowed(callback.from_user.id):
+            await callback.answer("❌ Ruxsat yo‘q.", show_alert=True)
+            return
+        share_type = callback.data.split(":", 1)[1]
+        if share_type not in {"percent", "amount"}:
+            await callback.answer("❌ Noto‘g‘ri ulush turi.", show_alert=True)
+            return
+        await state.update_data(share_type=share_type)
+        await state.set_state(AdditionalIncomeStates.waiting_share_value)
+        await callback.answer()
+        await callback.message.answer(
+            "📊 Worker ulushini foiz yoki summada kiriting:"
+        )
+
+    @router.message(AdditionalIncomeStates.waiting_share_value, F.text)
+    async def receive_additional_income_share(
+        message: Message, state: FSMContext
+    ) -> None:
+        if not await staff_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("❌ Ruxsat yo‘q.")
+            return
+        value = _parse_money(message.text)
+        data = await state.get_data()
+        if value is None or data.get("share_type") not in {"percent", "amount"}:
+            await message.answer("❌ Musbat foiz yoki summa kiriting.")
+            return
+        amount = Decimal(data["amount"])
+        share_type = data["share_type"]
+        if share_type == "percent" and value > Decimal("100"):
+            await message.answer("❌ Foiz 100 dan oshmasin.")
+            return
+        worker_amount = (
+            amount * value / Decimal("100") if share_type == "percent" else value
+        )
+        if worker_amount > amount:
+            await message.answer("❌ Worker ulushi umumiy daromaddan oshmasin.")
+            return
+        async with session_factory() as session:
+            session.add(
+                WorkerAdditionalIncome(
+                    worker_id=int(data["worker_id"]),
+                    description=data["description"],
+                    amount=amount,
+                    share_type=share_type,
+                    share_value=value,
+                    worker_amount=worker_amount.quantize(Decimal("0.01")),
+                    occurred_at=datetime.now(TASHKENT),
+                    created_by=message.from_user.id,
+                )
+            )
+            await session.commit()
+        await state.clear()
+        menu = (
+            director_menu_keyboard()
+            if await director_allowed(message.from_user.id)
+            else operator_menu_keyboard()
+        )
+        await message.answer(
+            f"✅ Qo‘shimcha daromad saqlandi: {_safe(data['description'])}\n"
+            f"Umumiy: {_safe(format_price(int(amount)))} | "
+            f"Worker ulushi: {_safe(format_price(int(worker_amount)))}",
+            reply_markup=menu,
+        )
+
+    @router.message(F.text.in_({"👥 Operatorlarni boshqarish", "Operatorlarni boshqarish"}))
+    async def manage_operators(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await message.answer("❌ Bu amal faqat direktor uchun.")
+            return
+        async with session_factory() as session:
+            operators = list((await session.scalars(
+                select(User).where(User.rol == "operator").order_by(User.name)
+            )).all())
+        await state.clear()
+        await message.answer(
+            "👥 Operatorlar:",
+            reply_markup=operator_management_keyboard(operators),
+        )
+
+    @router.callback_query(F.data == "operator_add")
+    async def start_operator_add(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        await state.set_state(OperatorStates.waiting_user_id)
+        await callback.answer()
+        await callback.message.answer("🧑‍💼 Operator Telegram ID raqamini kiriting:")
+
+    @router.message(OperatorStates.waiting_user_id, F.text)
+    async def receive_operator_id(message: Message, state: FSMContext) -> None:
+        if not await director_allowed(message.from_user.id):
+            await state.clear()
+            await message.answer("❌ Bu amal faqat direktor uchun.")
+            return
+        try:
+            user_id = int(message.text.strip())
+        except ValueError:
+            await message.answer("❌ ID faqat raqam bo‘lishi kerak.")
+            return
+        if user_id <= 0 or user_id == message.from_user.id:
+            await message.answer("❌ Bu ID operator sifatida qo‘shilmaydi.")
+            return
+        async with session_factory() as session:
+            user = await session.get(User, user_id)
+            if user is None:
+                user = User(telegram_id=user_id, rol="operator")
+                session.add(user)
+            elif await session.get(Worker, user_id) is not None or user.rol == "direktor":
+                await state.clear()
+                await message.answer("❌ Worker yoki direktor operator bo‘la olmaydi.")
+                return
+            else:
+                user.rol = "operator"
+            await session.commit()
+        await state.clear()
+        await message.answer("✅ Operator qo‘shildi.", reply_markup=director_menu_keyboard())
+
+    @router.callback_query(F.data.startswith("operator_remove:"))
+    async def remove_operator(callback: CallbackQuery) -> None:
+        if not await director_allowed(callback.from_user.id):
+            await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+            return
+        try:
+            user_id = int(callback.data.split(":", 1)[1])
+        except (TypeError, ValueError):
+            await callback.answer("❌ Tugma ma’lumoti eskirgan.", show_alert=True)
+            return
+        async with session_factory() as session:
+            user = await session.get(User, user_id, with_for_update=True)
+            if not user or user.rol != "operator":
+                await callback.answer("❌ Operator topilmadi.", show_alert=True)
+                return
+            if await session.get(Worker, user_id) is not None:
+                await callback.answer("❌ Worker roli ustun.", show_alert=True)
+                return
+            user.rol = "mijoz"
+            await session.commit()
+        await callback.answer("✅ Operator olib tashlandi.")
+        await callback.message.answer("Operator mijoz roliga qaytarildi.")
 
     register_worker_routes(router, session_factory, settings, scheduler)
     return router

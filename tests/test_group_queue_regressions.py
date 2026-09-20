@@ -26,7 +26,9 @@ from ryx_wash_bot.models import (
     Order,
     User,
     Worker,
+    WorkerAdditionalIncome,
 )
+from ryx_wash_bot.main import reconcile_staff_roles
 from ryx_wash_bot.scheduler import (
     configure_wash_timer_runtime,
     expire_wash_timeout,
@@ -251,6 +253,70 @@ async def load_orders(sessions, order_ids: list[int]) -> list[Order]:
         )
 
 
+async def assign_group_share(
+    router,
+    bot,
+    lead_order_id: int,
+    worker_id: int,
+    *,
+    share_type: str = "none",
+    value: str | None = None,
+) -> None:
+    await handler(router, "callback_query", "choose_group_wash_duration")(
+        RecordingCallback(
+            f"group_worker:{lead_order_id}:{worker_id}",
+            DIRECTOR_ID,
+            bot,
+        )
+    )
+    state = RecordingState()
+    await handler(router, "callback_query", "choose_order_share")(
+        RecordingCallback(
+            f"group_share:{share_type}:{lead_order_id}:{worker_id}",
+            DIRECTOR_ID,
+            bot,
+        ),
+        state,
+    )
+    if value is not None:
+        await handler(router, "message", "receive_order_share_value")(
+            RecordingMessage(bot, DIRECTOR_ID, value),
+            state,
+        )
+
+
+async def assign_direct_share(
+    router,
+    bot,
+    order_id: int,
+    worker_id: int,
+    *,
+    share_type: str = "none",
+    value: str | None = None,
+) -> None:
+    await handler(router, "callback_query", "choose_wash_duration")(
+        RecordingCallback(
+            f"assign_worker:{order_id}:{worker_id}",
+            DIRECTOR_ID,
+            bot,
+        )
+    )
+    state = RecordingState()
+    await handler(router, "callback_query", "choose_order_share")(
+        RecordingCallback(
+            f"order_share:{share_type}:{order_id}:{worker_id}",
+            DIRECTOR_ID,
+            bot,
+        ),
+        state,
+    )
+    if value is not None:
+        await handler(router, "message", "receive_order_share_value")(
+            RecordingMessage(bot, DIRECTOR_ID, value),
+            state,
+        )
+
+
 def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
     async def scenario():
         engine, sessions, _settings, scheduler, router = await make_context()
@@ -283,30 +349,29 @@ def test_mixed_saved_and_new_two_car_group_accepts_as_one_worker_unit():
                 await session.commit()
             bot = RecordingBot()
 
-            await handler(router, "callback_query", "choose_group_wash_duration")(
-                RecordingCallback(
-                    f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
-                    DIRECTOR_ID,
-                    bot,
-                )
-            )
-            await handler(
-                router, "callback_query", "assign_group_to_worker_with_wash_duration"
-            )(
-                RecordingCallback(
-                    f"group_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
-                    DIRECTOR_ID,
-                    bot,
-                )
+            await assign_group_share(
+                router,
+                bot,
+                order_ids[0],
+                WORKER_ONE_ID,
+                share_type="percent",
+                value="30",
             )
             orders = await load_orders(sessions, order_ids)
             assert [(order.status, order.worker_id) for order in orders] == [
                 ("ishchiga_yuborildi", WORKER_ONE_ID),
                 ("navbatda", WORKER_ONE_ID),
             ]
-            assert all(order.wash_duration_minutes == 60 for order in orders)
+            assert [order.worker_share_type for order in orders] == [
+                "percent",
+                "percent",
+            ]
+            assert [order.worker_share_amount for order in orders] == [
+                Decimal("30000.00"),
+                Decimal("37500.00"),
+            ]
             assert not scheduler.jobs
-            assert any("60 daqiqa" in text for text in bot.messages())
+            assert not any("daqiqa" in text for text in bot.messages())
 
             accept_callback = RecordingCallback(
                 f"worker_accept:{order_ids[0]}", WORKER_ONE_ID, bot
@@ -1001,21 +1066,11 @@ def test_single_worker_reject_releases_every_group_sibling():
             await add_people(sessions)
             order_ids = await add_group(sessions)
             bot = RecordingBot()
-            await handler(router, "callback_query", "choose_group_wash_duration")(
-                RecordingCallback(
-                    f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
-                    DIRECTOR_ID,
-                    bot,
-                )
-            )
-            await handler(
-                router, "callback_query", "assign_group_to_worker_with_wash_duration"
-            )(
-                RecordingCallback(
-                    f"group_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
-                    DIRECTOR_ID,
-                    bot,
-                )
+            await assign_group_share(
+                router,
+                bot,
+                order_ids[0],
+                WORKER_ONE_ID,
             )
             await handler(router, "callback_query", "reject_order")(
                 RecordingCallback(
@@ -1034,28 +1089,18 @@ def test_single_worker_reject_releases_every_group_sibling():
     run(scenario())
 
 
-def test_wash_timer_notifies_worker_without_releasing_group_assignment():
+def test_worker_lifecycle_is_arrival_then_completion_without_wash_timer():
     async def scenario():
-        engine, sessions, settings, scheduler, router = await make_context()
+        engine, sessions, _settings, scheduler, router = await make_context()
         try:
             await add_people(sessions)
             order_ids = await add_group(sessions)
             bot = RecordingBot()
-            await handler(router, "callback_query", "choose_group_wash_duration")(
-                RecordingCallback(
-                    f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
-                    DIRECTOR_ID,
-                    bot,
-                )
-            )
-            await handler(
-                router, "callback_query", "assign_group_to_worker_with_wash_duration"
-            )(
-                RecordingCallback(
-                    f"group_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
-                    DIRECTOR_ID,
-                    bot,
-                )
+            await assign_group_share(
+                router,
+                bot,
+                order_ids[0],
+                WORKER_ONE_ID,
             )
             await handler(router, "callback_query", "accept_order")(
                 RecordingCallback(
@@ -1068,45 +1113,29 @@ def test_wash_timer_notifies_worker_without_releasing_group_assignment():
             )
             await update_status(
                 RecordingCallback(
-                    f"worker_status:route:{order_ids[0]}",
-                    WORKER_ONE_ID,
-                    bot,
-                ),
-                state,
-            )
-            await handler(router, "message", "receive_arrival_eta")(
-                RecordingMessage(bot, WORKER_ONE_ID, "25 daqiqa"),
-                state,
-            )
-            await update_status(
-                RecordingCallback(
                     f"worker_status:arrived:{order_ids[0]}",
                     WORKER_ONE_ID,
                     bot,
                 ),
                 state,
             )
-            await update_status(
-                RecordingCallback(
-                    f"worker_status:washing:{order_ids[0]}",
-                    WORKER_ONE_ID,
-                    bot,
-                ),
-                state,
-            )
-            configure_wash_timer_runtime(sessions, bot, settings)
-            await expire_wash_timeout(order_ids[0])
             orders = await load_orders(sessions, order_ids)
             assert all(order.worker_id == WORKER_ONE_ID for order in orders)
-            assert orders[0].arrival_eta_minutes == 25
-            assert orders[0].arrival_eta_at is not None
-            assert orders[0].status == "yuvish_boshlandi"
-            assert any("gacha" in text for text in bot.messages())
-            assert f"wash-timeout:{order_ids[0]}" in scheduler.jobs
+            assert orders[0].arrived_at is not None
+            assert orders[0].status == "yetib_keldi"
+            assert not scheduler.jobs
             async with sessions() as session:
                 worker = await session.get(Worker, WORKER_ONE_ID)
                 assert worker.status == "band"
-            assert any("60 daqiqalik yuvish vaqti tugadi" in text for text in bot.messages())
+            legacy_callback = RecordingCallback(
+                f"worker_status:washing:{order_ids[0]}",
+                WORKER_ONE_ID,
+                bot,
+            )
+            await update_status(legacy_callback, state)
+            orders = await load_orders(sessions, order_ids)
+            assert orders[0].status == "yuvish_boshlandi"
+            assert not scheduler.jobs
         finally:
             await engine.dispose()
 
@@ -1153,21 +1182,11 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             await add_people(sessions)
             order_ids = await add_group(sessions)
             bot = RecordingBot()
-            await handler(router, "callback_query", "choose_group_wash_duration")(
-                RecordingCallback(
-                    f"group_worker:{order_ids[0]}:{WORKER_ONE_ID}",
-                    DIRECTOR_ID,
-                    bot,
-                )
-            )
-            await handler(
-                router, "callback_query", "assign_group_to_worker_with_wash_duration"
-            )(
-                RecordingCallback(
-                    f"group_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
-                    DIRECTOR_ID,
-                    bot,
-                )
+            await assign_group_share(
+                router,
+                bot,
+                order_ids[0],
+                WORKER_ONE_ID,
             )
             await handler(router, "callback_query", "accept_order")(
                 RecordingCallback(
@@ -1176,20 +1195,14 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             )
             state = RecordingState()
             update_status = handler(router, "callback_query", "update_worker_status")
-            for stage in ("route", "arrived", "washing"):
-                await update_status(
-                    RecordingCallback(
-                        f"worker_status:{stage}:{order_ids[0]}",
-                        WORKER_ONE_ID,
-                        bot,
-                    ),
-                    state,
-                )
-                if stage == "route":
-                    await handler(router, "message", "receive_arrival_eta")(
-                        RecordingMessage(bot, WORKER_ONE_ID, "30"),
-                        state,
-                    )
+            await update_status(
+                RecordingCallback(
+                    f"worker_status:arrived:{order_ids[0]}",
+                    WORKER_ONE_ID,
+                    bot,
+                ),
+                state,
+            )
             await update_status(
                 RecordingCallback(
                     f"worker_status:complete:{order_ids[0]}",
@@ -1232,8 +1245,8 @@ def test_single_worker_group_finishing_first_car_offers_next_car_in_order():
             )
             orders = await load_orders(sessions, order_ids)
             assert orders[0].status == "yakunlandi"
-            assert orders[0].arrival_eta_minutes == 30
-            assert orders[0].arrival_eta_at is not None
+            assert orders[0].arrived_at is not None
+            assert orders[0].completed_at >= orders[0].arrived_at
             assert orders[1].status == "ishchiga_yuborildi"
             assert orders[1].worker_id == WORKER_ONE_ID
             assert not scheduler.jobs
@@ -1261,37 +1274,21 @@ def test_split_group_assigns_each_car_to_a_different_worker_independently():
                     bot,
                 )
             )
-            assign = handler(router, "callback_query", "assign_order")
-            choose_timeout = handler(
-                router, "callback_query", "choose_wash_duration"
+            await assign_direct_share(
+                router,
+                bot,
+                order_ids[0],
+                WORKER_ONE_ID,
+                share_type="percent",
+                value="25",
             )
-            await choose_timeout(
-                RecordingCallback(
-                    f"assign_worker:{order_ids[0]}:{WORKER_ONE_ID}",
-                    DIRECTOR_ID,
-                    bot,
-                )
-            )
-            await assign(
-                RecordingCallback(
-                    f"assign_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
-                    DIRECTOR_ID,
-                    bot,
-                )
-            )
-            await choose_timeout(
-                RecordingCallback(
-                    f"assign_worker:{order_ids[1]}:{WORKER_TWO_ID}",
-                    DIRECTOR_ID,
-                    bot,
-                )
-            )
-            await assign(
-                RecordingCallback(
-                    f"assign_worker_wash_duration:{order_ids[1]}:{WORKER_TWO_ID}:90",
-                    DIRECTOR_ID,
-                    bot,
-                )
+            await assign_direct_share(
+                router,
+                bot,
+                order_ids[1],
+                WORKER_TWO_ID,
+                share_type="amount",
+                value="15000",
             )
             orders = await load_orders(sessions, order_ids)
             assert [order.group_mode for order in orders] == ["split", "split"]
@@ -1300,36 +1297,36 @@ def test_split_group_assigns_each_car_to_a_different_worker_independently():
                 WORKER_TWO_ID,
             ]
             assert all(order.status == "ishchiga_yuborildi" for order in orders)
+            assert [order.worker_share_amount for order in orders] == [
+                Decimal("25000.00"),
+                Decimal("15000.00"),
+            ]
         finally:
             await engine.dispose()
 
     run(scenario())
 
 
-def test_director_can_enter_custom_wash_duration():
+def test_director_can_enter_custom_worker_share():
     async def scenario():
         engine, sessions, _settings, _scheduler, router = await make_context()
         try:
             await add_people(sessions)
             order_id = (await add_group(sessions, count=1))[0]
             bot = RecordingBot()
-            state = RecordingState()
-            await handler(router, "callback_query", "request_custom_wash_duration")(
-                RecordingCallback(
-                    f"assign_worker_wash_duration_custom:{order_id}:{WORKER_ONE_ID}",
-                    DIRECTOR_ID,
-                    bot,
-                ),
-                state,
-            )
-            await handler(router, "message", "receive_custom_wash_duration")(
-                RecordingMessage(bot, DIRECTOR_ID, "75"),
-                state,
+            await assign_direct_share(
+                router,
+                bot,
+                order_id,
+                WORKER_ONE_ID,
+                share_type="percent",
+                value="75",
             )
             orders = await load_orders(sessions, [order_id])
-            assert orders[0].wash_duration_minutes == 75
+            assert orders[0].worker_share_type == "percent"
+            assert orders[0].worker_share_value == Decimal("75.00")
+            assert orders[0].worker_share_amount == Decimal("75000.00")
             assert orders[0].status == "ishchiga_yuborildi"
-            assert any("75 daqiqa" in text for text in bot.messages())
         finally:
             await engine.dispose()
 
@@ -1360,22 +1357,27 @@ def test_parallel_assign_callbacks_only_allow_one_worker_to_claim_order(tmp_path
                 )
                 for worker_id in (WORKER_ONE_ID, WORKER_TWO_ID)
             ]
-            choose_timeout = handler(
-                router, "callback_query", "choose_wash_duration"
+            await asyncio.gather(
+                *(
+                    handler(router, "callback_query", "choose_wash_duration")(callback)
+                    for callback in callbacks
+                )
             )
-            assign = handler(router, "callback_query", "assign_order")
-
-            await asyncio.gather(*(choose_timeout(callback) for callback in callbacks))
-            timeout_callbacks = [
+            share_callbacks = [
                 RecordingCallback(
-                    f"assign_worker_wash_duration:{order_id}:{worker_id}:60",
+                    f"order_share:none:{order_id}:{worker_id}",
                     DIRECTOR_ID,
                     bot,
                 )
                 for worker_id in (WORKER_ONE_ID, WORKER_TWO_ID)
             ]
             await asyncio.gather(
-                *(assign(callback) for callback in timeout_callbacks)
+                *(
+                    handler(router, "callback_query", "choose_order_share")(
+                        callback, RecordingState()
+                    )
+                    for callback in share_callbacks
+                )
             )
 
             async with sessions() as session:
@@ -1416,10 +1418,9 @@ def test_parallel_assign_callbacks_only_allow_one_worker_to_claim_order(tmp_path
             assert not scheduler.jobs
             assert not scheduler.add_job_calls
             assert sum(
-                answer == "Bu buyurtma allaqachon ishchiga yuborilgan."
-                and kwargs.get("show_alert") is True
-                for callback in timeout_callbacks
-                for answer, kwargs in callback.answers
+                kwargs.get("show_alert") is True
+                for callback in share_callbacks
+                for _answer, kwargs in callback.answers
             ) == 1
         finally:
             await engine.dispose()
@@ -1559,19 +1560,11 @@ def test_offline_customer_does_not_stop_worker_acceptance_flow():
                 sessions, customer_id=-1, group_id="offline-group", count=1
             )
             bot = RecordingBot()
-            await handler(router, "callback_query", "choose_wash_duration")(
-                RecordingCallback(
-                    f"assign_worker:{order_ids[0]}:{WORKER_ONE_ID}",
-                    DIRECTOR_ID,
-                    bot,
-                )
-            )
-            await handler(router, "callback_query", "assign_order")(
-                RecordingCallback(
-                    f"assign_worker_wash_duration:{order_ids[0]}:{WORKER_ONE_ID}:60",
-                    DIRECTOR_ID,
-                    bot,
-                )
+            await assign_direct_share(
+                router,
+                bot,
+                order_ids[0],
+                WORKER_ONE_ID,
             )
             await handler(router, "callback_query", "accept_order")(
                 RecordingCallback(
@@ -1755,6 +1748,9 @@ def test_worker_report_breaks_down_orders_and_revenue_by_worker():
                             plate_number="01 A 111 AA",
                             payment_method="Naqd",
                             status="yakunlandi",
+                            worker_share_type="percent",
+                            worker_share_value=Decimal("30"),
+                            worker_share_amount=Decimal("15000"),
                             completed_at=datetime(
                                 2026, 8, 31, 5, 0, tzinfo=timezone.utc
                             ),
@@ -1768,6 +1764,9 @@ def test_worker_report_breaks_down_orders_and_revenue_by_worker():
                             plate_number="01 B 222 BB",
                             payment_method="Karta",
                             status="yakunlandi",
+                            worker_share_type="percent",
+                            worker_share_value=Decimal("40"),
+                            worker_share_amount=Decimal("28000"),
                             completed_at=datetime(
                                 2026, 8, 31, 6, 0, tzinfo=timezone.utc
                             ),
@@ -1821,6 +1820,9 @@ def test_worker_report_handles_inactive_history_cancellations_and_boundaries():
                     payment_method="Naqd",
                     status="yakunlandi",
                     completed_at=start,
+                    worker_share_type="percent",
+                    worker_share_value=Decimal("33.33"),
+                    worker_share_amount=Decimal("1.67"),
                 )
                 excluded = Order(
                     customer_id=CUSTOMER_ID,
@@ -1867,7 +1869,7 @@ def test_worker_report_handles_inactive_history_cancellations_and_boundaries():
             assert "&lt;Cobalt&gt;" in report
             assert "&lt;Mijoz bekor qildi&gt;" in report
             assert "Bekor qilingan:</b> 1 ta" in report
-            assert "Worker ulushi (33.33%): 2 " in report
+            assert "Worker payout (33.33%): 2 " in report
             assert "Chegaradan tashqari" not in report
             assert "yakunlangan buyurtmalar topilmadi" in "\n".join(empty_chunks)
             assert all(len(chunk) <= 4096 for chunk in chunks)
@@ -1896,6 +1898,211 @@ def test_report_rejects_malformed_worker_and_expired_session_callbacks():
             await generate(expired, state)
             assert expired.answers[-1][1].get("show_alert") is True
             assert state.cleared is True
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_configured_director_demotes_previous_director_to_operator():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, _router = await make_context()
+        try:
+            await add_people(sessions)
+            new_director_id = 9100
+            await reconcile_staff_roles(sessions, new_director_id)
+            async with sessions() as session:
+                old_director = await session.get(User, DIRECTOR_ID)
+                new_director = await session.get(User, new_director_id)
+            assert old_director.rol == "operator"
+            assert new_director.rol == "direktor"
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_director_manages_operators_and_operator_can_use_crm():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            operator_id = 7100
+            bot = RecordingBot()
+            state = RecordingState()
+            await handler(router, "callback_query", "start_operator_add")(
+                RecordingCallback("operator_add", DIRECTOR_ID, bot),
+                state,
+            )
+            await handler(router, "message", "receive_operator_id")(
+                RecordingMessage(bot, DIRECTOR_ID, str(operator_id)),
+                state,
+            )
+            async with sessions() as session:
+                operator = await session.get(User, operator_id)
+            assert operator is not None and operator.rol == "operator"
+
+            crm_message = RecordingMessage(bot, operator_id, "Mijozlar bazasi")
+            await handler(router, "message", "open_crm")(
+                crm_message,
+                RecordingState(),
+            )
+            assert crm_message.answer_calls
+            search_callback = RecordingCallback("crm_search", operator_id, bot)
+            search_state = RecordingState()
+            await handler(router, "callback_query", "start_crm_search")(
+                search_callback,
+                search_state,
+            )
+            assert not any(
+                kwargs.get("show_alert") for _text, kwargs in search_callback.answers
+            )
+
+            denied = RecordingMessage(bot, operator_id, "Operatorlarni boshqarish")
+            await handler(router, "message", "manage_operators")(
+                denied,
+                RecordingState(),
+            )
+            assert "faqat direktor" in str(denied.answer_calls[-1][0])
+
+            await handler(router, "callback_query", "remove_operator")(
+                RecordingCallback(
+                    f"operator_remove:{operator_id}",
+                    DIRECTOR_ID,
+                    bot,
+                )
+            )
+            async with sessions() as session:
+                removed = await session.get(User, operator_id)
+            assert removed.rol == "mijoz"
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_worker_expenses_additional_income_and_profit_math():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            operator_id = 7200
+            now = datetime.now(worker_handlers.TASHKENT)
+            async with sessions() as session:
+                session.add(User(telegram_id=operator_id, name="Operator", rol="operator"))
+                session.add(
+                    Order(
+                        customer_id=CUSTOMER_ID,
+                        worker_id=WORKER_ONE_ID,
+                        car_category="Sedan",
+                        car_model="Cobalt",
+                        car_price=Decimal("100000"),
+                        payment_method="Naqd",
+                        status="yakunlandi",
+                        arrived_at=now - timedelta(minutes=90),
+                        completed_at=now,
+                        worker_share_type="amount",
+                        worker_share_value=Decimal("30000"),
+                        worker_share_amount=Decimal("30000"),
+                    )
+                )
+                await session.commit()
+
+            bot = RecordingBot()
+            for owner_data, amount, description in (
+                (f"expense_owner:worker:{WORKER_ONE_ID}", "10000", "Kimyoviy vosita"),
+                ("expense_owner:general", "5000", "Ofis xarajati"),
+            ):
+                state = RecordingState()
+                await handler(router, "callback_query", "choose_expense_owner")(
+                    RecordingCallback(owner_data, DIRECTOR_ID, bot),
+                    state,
+                )
+                await handler(router, "message", "receive_expense_amount")(
+                    RecordingMessage(bot, DIRECTOR_ID, amount),
+                    state,
+                )
+                await handler(router, "message", "receive_expense_description")(
+                    RecordingMessage(bot, DIRECTOR_ID, description),
+                    state,
+                )
+
+            async def add_income(
+                description: str,
+                amount: str,
+                share_type: str,
+                share_value: str,
+            ) -> None:
+                state = RecordingState()
+                await handler(
+                    router, "callback_query", "choose_additional_income_worker"
+                )(
+                    RecordingCallback(
+                        f"additional_income_worker:{WORKER_ONE_ID}",
+                        operator_id,
+                        bot,
+                    ),
+                    state,
+                )
+                await handler(
+                    router, "message", "receive_additional_income_description"
+                )(
+                    RecordingMessage(bot, operator_id, description),
+                    state,
+                )
+                await handler(router, "message", "receive_additional_income_amount")(
+                    RecordingMessage(bot, operator_id, amount),
+                    state,
+                )
+                await handler(
+                    router, "callback_query", "choose_additional_income_share"
+                )(
+                    RecordingCallback(
+                        f"additional_income_share:{share_type}",
+                        operator_id,
+                        bot,
+                    ),
+                    state,
+                )
+                await handler(router, "message", "receive_additional_income_share")(
+                    RecordingMessage(bot, operator_id, share_value),
+                    state,
+                )
+
+            await add_income("Polirovka", "40000", "percent", "25")
+            await add_income("Salon tozalash", "20000", "amount", "5000")
+
+            async with sessions() as session:
+                expenses = list((await session.scalars(select(Expense))).all())
+                incomes = list(
+                    (await session.scalars(select(WorkerAdditionalIncome))).all()
+                )
+                start = now - timedelta(days=1)
+                end = now + timedelta(days=1)
+                all_report = "\n".join(
+                    await build_financial_report(session, start, end)
+                )
+                worker_report = "\n".join(
+                    await build_financial_report(
+                        session,
+                        start,
+                        end,
+                        worker_id=WORKER_ONE_ID,
+                    )
+                )
+
+            assert {expense.worker_id for expense in expenses} == {
+                None,
+                WORKER_ONE_ID,
+            }
+            assert [(item.share_type, item.worker_amount) for item in incomes] == [
+                ("percent", Decimal("10000.00")),
+                ("amount", Decimal("5000.00")),
+            ]
+            assert "Sof foyda:</b> 100 000" in all_report
+            assert "business profit: 105 000" in worker_report
+            assert "Worker xarajati: 10 000" in worker_report
+            assert "1 soat 30 daqiqa" in worker_report
         finally:
             await engine.dispose()
 

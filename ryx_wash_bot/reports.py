@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .catalog import format_price
 from .config import Settings
-from .models import Cancellation, Expense, Order, User, Worker
+from .models import Cancellation, Expense, Order, User, Worker, WorkerAdditionalIncome
 
 TASHKENT = ZoneInfo("Asia/Tashkent")
 
@@ -41,6 +41,15 @@ def _safe_summary(value: object, limit: int = 3000) -> str:
     if truncated:
         escaped_parts.append("...")
     return "".join(escaped_parts)
+
+
+def _duration_text(start: datetime | None, end: datetime | None) -> str:
+    if not start or not end:
+        return "—"
+    seconds = max(0, int((end - start).total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours} soat {minutes} daqiqa" if hours else f"{minutes} daqiqa {seconds} soniya"
 
 
 def day_bounds(now: datetime | None = None) -> tuple[datetime, datetime]:
@@ -106,8 +115,32 @@ async def build_financial_report(
             )
         ).all()
     )
+    additional = list(
+        (
+            await session.scalars(
+                select(WorkerAdditionalIncome).where(
+                    WorkerAdditionalIncome.occurred_at >= start,
+                    WorkerAdditionalIncome.occurred_at < end,
+                )
+            )
+        ).all()
+    )
+
+    def order_earning(order: Order) -> Decimal:
+        if order.worker_share_type == "none":
+            return Decimal("0")
+        if order.worker_share_amount is not None:
+            return Decimal(order.worker_share_amount)
+        if order.worker_share_type == "amount" and order.worker_share_value is not None:
+            return Decimal(order.worker_share_value)
+        if order.worker_share_type == "percent" and order.worker_share_value is not None:
+            return Decimal(order.car_price) * Decimal(order.worker_share_value) / Decimal("100")
+        return Decimal("0")
 
     revenue = sum((Decimal(order.car_price) for order in orders), Decimal("0"))
+    additional_gross = sum((Decimal(item.amount) for item in additional), Decimal("0"))
+    additional_earnings = sum((Decimal(item.worker_amount) for item in additional), Decimal("0"))
+    worker_earnings = sum((order_earning(order) for order in orders), Decimal("0"))
     cash = sum(
         (
             Decimal(order.car_price)
@@ -128,7 +161,18 @@ async def build_financial_report(
         (Decimal(expense.amount) for expense in expenses),
         Decimal("0"),
     )
-    net_profit = revenue - expense_total
+    net_profit = (
+        revenue + additional_gross - expense_total
+        - worker_earnings - additional_earnings
+    )
+    display_additional_gross = (
+        sum(
+            (Decimal(item.amount) for item in additional if item.worker_id == worker_id),
+            Decimal("0"),
+        )
+        if worker_id is not None
+        else additional_gross
+    )
 
     period_end = end - timedelta(microseconds=1)
     filter_label = worker.name if worker else "Barcha ishchilar"
@@ -139,19 +183,43 @@ async def build_financial_report(
         f"<b>Filtr:</b> {_safe(filter_label)}\n\n"
         f"<b>🧼 Yuvilgan mashinalar:</b> {len(orders)} ta\n"
         f"<b>💰 Umumiy tushum:</b> {_money(revenue)}\n"
+        f"<b>➕ Qo‘shimcha daromad:</b> {_money(display_additional_gross)}\n"
         f"• 💵 Naqd: {_money(cash)}\n"
         f"• 💳 Karta: {_money(card)}\n"
         f"<b>🚫 Bekor qilingan:</b> {len(cancellations)} ta"
     )
     if worker is not None:
-        worker_share = revenue * Decimal(worker.share_percent) / Decimal("100")
+        worker_additional = [
+            item for item in additional if item.worker_id == worker_id
+        ]
+        worker_share = sum(
+            (order_earning(order) for order in orders), Decimal("0")
+        )
+        worker_additional_gross = sum(
+            (Decimal(item.amount) for item in worker_additional), Decimal("0")
+        )
+        worker_additional_earnings = sum(
+            (Decimal(item.worker_amount) for item in worker_additional), Decimal("0")
+        )
+        worker_expense = sum(
+            (Decimal(item.amount) for item in expenses if item.worker_id == worker_id),
+            Decimal("0"),
+        )
+        worker_profit = (
+            revenue + worker_additional_gross - worker_share
+            - worker_additional_earnings - worker_expense
+        )
         average_check = revenue / len(orders) if orders else Decimal("0")
         header += (
             f"\n\n<b>👷 {_safe(worker.name)} hisoboti</b>\n"
             f"• 📈 O‘rtacha chek: {_money(average_check)}\n"
-            f"• 💼 Worker ulushi "
+            f"• 💼 Worker payout "
             f"({_percent(worker.share_percent)}%): "
-            f"{_money(worker_share)}"
+            f"{_money(worker_share)}\n"
+            f"• ➕ Qo‘shimcha daromad: {_money(worker_additional_gross)}\n"
+            f"• ➕ Qo‘shimcha ulush: {_money(worker_additional_earnings)}\n"
+            f"• 📉 Worker xarajati: {_money(worker_expense)}\n"
+            f"• 💰 Worker-attributable business profit: {_money(worker_profit)}"
         )
     else:
         header += (
@@ -165,7 +233,8 @@ async def build_financial_report(
         detail_lines.append("\n<b>📉 Chiqimlar:</b>")
         detail_lines.extend(
             f"• {_safe(expense.description)} — "
-            f"{_money(Decimal(expense.amount))}"
+            f"{_money(Decimal(expense.amount))} | "
+            f"{'Umumiy' if expense.worker_id is None else f'Worker #{expense.worker_id}'}"
             for expense in expenses
         )
     if cancellations:
@@ -193,7 +262,8 @@ async def build_financial_report(
                     f"• <b>#{order.id}</b> {date_label} — "
                     f"{_safe(order.car_model)} | {_safe(plate)} | "
                     f"{_money(Decimal(order.car_price))} | "
-                    f"{_safe(payment)}"
+                    f"{_safe(payment)} | "
+                    f"⏱ {_duration_text(order.arrived_at, order.completed_at)}"
                 )
     else:
         orders_by_worker: dict[int | None, list[Order]] = {}
@@ -226,8 +296,30 @@ async def build_financial_report(
                 ),
                 Decimal("0"),
             )
-            worker_share = (
-                worker_revenue * Decimal(listed_worker.share_percent) / Decimal("100")
+            worker_share = sum(
+                (order_earning(order) for order in worker_orders), Decimal("0")
+            )
+            worker_additional = [
+                item for item in additional
+                if item.worker_id == listed_worker.user_id
+            ]
+            worker_additional_gross = sum(
+                (Decimal(item.amount) for item in worker_additional), Decimal("0")
+            )
+            worker_additional_earnings = sum(
+                (Decimal(item.worker_amount) for item in worker_additional), Decimal("0")
+            )
+            worker_expense = sum(
+                (
+                    Decimal(item.amount)
+                    for item in expenses
+                    if item.worker_id == listed_worker.user_id
+                ),
+                Decimal("0"),
+            )
+            worker_profit = (
+                worker_revenue + worker_additional_gross - worker_share
+                - worker_additional_earnings - worker_expense
             )
             average_check = (
                 worker_revenue / len(worker_orders) if worker_orders else Decimal("0")
@@ -244,6 +336,10 @@ async def build_financial_report(
                     f"• 📈 O‘rtacha chek: {_money(average_check)}",
                     f"• 💼 Ulush ({_percent(listed_worker.share_percent)}%): "
                     f"{_money(worker_share)}",
+                    f"• ➕ Qo‘shimcha daromad: {_money(worker_additional_gross)}",
+                    f"• ➕ Qo‘shimcha ulush: {_money(worker_additional_earnings)}",
+                    f"• 📉 Worker xarajati: {_money(worker_expense)}",
+                    f"• 💰 Worker foydasi: {_money(worker_profit)}",
                 ]
             )
             if worker_orders:
@@ -259,7 +355,8 @@ async def build_financial_report(
                         f"{_safe(order.car_model)} | "
                         f"{_safe(order.plate_number or 'Raqam yo‘q')} | "
                         f"{_money(Decimal(order.car_price))} | "
-                        f"{_safe(order.payment_method or 'To‘lov ko‘rsatilmagan')}"
+                        f"{_safe(order.payment_method or 'To‘lov ko‘rsatilmagan')} | "
+                        f"⏱ {_duration_text(order.arrived_at, order.completed_at)}"
                     )
             else:
                 detail_lines.append("  <i>Davrda yakunlangan order yo‘q.</i>")
