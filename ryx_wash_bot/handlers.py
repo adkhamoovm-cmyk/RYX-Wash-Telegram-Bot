@@ -2033,8 +2033,9 @@ def _new_router(
         await state.clear()
         await message.answer(
             (
-                f"{len(orders)} ta mashina uchun buyurtma yaratildi. "
-                "Endi taqsimlash usulini tanlang."
+                f"✅ {len(orders)} ta mashina uchun buyurtma yaratildi. "
+                "Direktor tasdig‘i talab qilinmaydi. "
+                "Ishchiga taqsimlash direktorga yuborildi."
             ),
             reply_markup=(
                 director_menu_keyboard()

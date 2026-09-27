@@ -2205,12 +2205,54 @@ def test_operator_can_choose_manual_car_category_and_model():
     run(scenario())
 
 
+def test_operator_creates_manual_order_without_director_approval():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            operator_id = 8200
+            async with sessions() as session:
+                session.add(User(telegram_id=operator_id, name="Operator", rol="operator"))
+                await session.commit()
+            bot = RecordingBot()
+            state = RecordingState({
+                "customer_id": CUSTOMER_ID,
+                "cars": [{
+                    "car_category": "Sedan",
+                    "car_model": "Cobalt",
+                    "car_price": 50000,
+                    "plate_number": None,
+                }],
+                "visit_at": (datetime.now(worker_handlers.TASHKENT) + timedelta(hours=2)).isoformat(),
+                "address": "Toshkent",
+            })
+            message = RecordingMessage(bot, operator_id, "⏭️ O'tkazib yuborish")
+            await handler(router, "message", "manual_comment")(message, state)
+            async with sessions() as session:
+                orders = list((await session.scalars(select(Order))).all())
+                assert len(orders) == 1
+                assert orders[0].status == "yangi"
+            assert state.cleared
+            assert any("Direktor tasdig‘i talab qilinmaydi" in str(text)
+                       for text, _ in message.answer_calls)
+            assert any(call[1] == DIRECTOR_ID and "Qo'lda kiritilgan" in call[2]
+                       for call in bot.calls if call[0] == "send_message")
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
 def test_worker_completes_with_only_before_photo_and_skipped_comment():
     async def scenario():
         engine, sessions, _settings, _scheduler, router = await make_context()
         try:
             await add_people(sessions, worker_statuses=("band",))
             async with sessions() as session:
+                session.add_all([
+                    User(telegram_id=8200, name="Operator 1", rol="operator"),
+                    User(telegram_id=8201, name="Operator 2", rol="operator"),
+                ])
                 order = Order(
                     customer_id=CUSTOMER_ID,
                     worker_id=WORKER_ONE_ID,
@@ -2247,7 +2289,17 @@ def test_worker_completes_with_only_before_photo_and_skipped_comment():
                 assert order.payment_method is None
                 assert order.after_photo_id is None
                 assert order.worker_comment is None
-            assert [call[2] for call in bot.calls if call[0] == "send_photo"] == ["photo-before"]
+            recipients = {DIRECTOR_ID, 8200, 8201}
+            photos = [call for call in bot.calls if call[0] == "send_photo"]
+            assert {call[1] for call in photos} == recipients
+            assert all(call[2] == "photo-before" for call in photos)
+            reports = [
+                call for call in bot.calls
+                if call[0] == "send_message" and "Yakuniy hisobot" in call[2]
+            ]
+            assert {call[1] for call in reports} == recipients
+            assert all("Mijoz" in call[2] and "Davlat raqami" in call[2]
+                       and f"Buyurtma #{order_id}" in call[2] for call in reports)
         finally:
             await engine.dispose()
 

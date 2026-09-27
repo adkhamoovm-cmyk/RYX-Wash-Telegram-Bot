@@ -5,3 +5,4 @@
 - [Assignment concurrency protocol](assignment-concurrency-protocol.md) — claim orders atomically and lock grouped rows by ID before workers to prevent duplicate assignment and deadlocks.
 - [Worker ETA recovery](worker-eta-recovery.md) — recover ETA input from the active database order when in-memory FSM state is unavailable.
 - [Worker status reconciliation](worker-status-reconciliation.md) — never trust a persisted busy flag without checking for a live nonterminal order.
+- [Order completion recipients](order-completion-recipients.md) — notify all current operators, not a guessed creator, until orders retain staff provenance.

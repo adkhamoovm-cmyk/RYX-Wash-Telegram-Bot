@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
@@ -2801,6 +2802,11 @@ def _register_user_routes(
                 await message.answer("📷 Avval «Oldin» rasmini yuboring:", reply_markup=ReplyKeyboardRemove())
                 return
             customer = await session.get(User, order.customer_id)
+            operator_ids = list(
+                (await session.scalars(
+                    select(User.telegram_id).where(User.rol == "operator")
+                )).all()
+            )
             completed_at = now_tashkent()
             order.status = "yakunlandi"
             order.completed_at = completed_at
@@ -2828,12 +2834,19 @@ def _register_user_routes(
             f"✅ Buyurtma #{order_id} yakunlandi.",
             reply_markup=worker_menu_keyboard(),
         )
-        await message.bot.send_message(settings.director_id, report)
-        await message.bot.send_photo(
-            settings.director_id,
-            before_photo_id,
-            caption="📷 Oldin",
-        )
+        for recipient_id in dict.fromkeys([settings.director_id, *operator_ids]):
+            try:
+                await message.bot.send_message(recipient_id, report)
+                await message.bot.send_photo(
+                    recipient_id,
+                    before_photo_id,
+                    caption=f"📷 Buyurtma #{order_id} — Oldin",
+                )
+            except TelegramAPIError:
+                logger.exception(
+                    "Could not deliver completed order %s to staff member %s",
+                    order_id, recipient_id,
+                )
         await notify_customer(
             message.bot,
             customer_id,
