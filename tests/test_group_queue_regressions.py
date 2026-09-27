@@ -41,6 +41,7 @@ from ryx_wash_bot.reports import (
 from ryx_wash_bot.states import (
     ManualOrderStates,
     WorkerCompletionStates,
+    WorkerFinanceStates,
     WorkerOrderStates,
 )
 from ryx_wash_bot import worker_handlers
@@ -1581,7 +1582,7 @@ def test_offline_customer_does_not_stop_worker_acceptance_flow():
     run(scenario())
 
 
-def test_worker_cabinet_resumes_plate_step_after_menu_state_reset():
+def test_worker_cabinet_resumes_photo_step_after_menu_state_reset():
     async def scenario():
         engine, sessions, _settings, _scheduler, router = await make_context()
         try:
@@ -1614,9 +1615,9 @@ def test_worker_cabinet_resumes_plate_step_after_menu_state_reset():
 
             assert state.cleared is True
             assert state.data == {"order_id": order_id}
-            assert state.states[-1] == WorkerOrderStates.waiting_plate
+            assert state.states[-1] == WorkerCompletionStates.waiting_before_photo
             assert any(
-                "Davlat raqamini" in str(text)
+                "Oldin" in str(text)
                 for text, _ in message.answer_calls
             )
         finally:
@@ -1667,7 +1668,7 @@ def test_stale_payment_callback_cannot_mutate_another_order():
     run(scenario())
 
 
-def test_photo_step_rejects_out_of_order_and_duplicate_evidence():
+def test_single_photo_without_payment_is_accepted_and_duplicate_rejected():
     async def scenario():
         engine, sessions, _settings, _scheduler, router = await make_context()
         try:
@@ -1699,16 +1700,15 @@ def test_photo_step_rejects_out_of_order_and_duplicate_evidence():
             await before(message, state)
             async with sessions() as session:
                 order = await session.get(Order, order_id)
-                assert order.before_photo_id is None
-                order.payment_method = "Naqd"
-                order.before_photo_id = "original"
-                await session.commit()
+                assert order.before_photo_id == "out-of-order"
+                assert order.payment_method is None
+            assert state.states[-1] == WorkerCompletionStates.waiting_comment
 
             duplicate_state = RecordingState({"order_id": order_id})
             await before(message, duplicate_state)
             async with sessions() as session:
                 order = await session.get(Order, order_id)
-                assert order.before_photo_id == "original"
+                assert order.before_photo_id == "out-of-order"
         finally:
             await engine.dispose()
 
@@ -1869,7 +1869,7 @@ def test_worker_report_handles_inactive_history_cancellations_and_boundaries():
             assert "&lt;Cobalt&gt;" in report
             assert "&lt;Mijoz bekor qildi&gt;" in report
             assert "Bekor qilingan:</b> 1 ta" in report
-            assert "Worker payout (33.33%): 2 " in report
+            assert "Ishchiga to‘lov: 2 " in report
             assert "Chegaradan tashqari" not in report
             assert "yakunlangan buyurtmalar topilmadi" in "\n".join(empty_chunks)
             assert all(len(chunk) <= 4096 for chunk in chunks)
@@ -2100,9 +2100,154 @@ def test_worker_expenses_additional_income_and_profit_math():
                 ("amount", Decimal("5000.00")),
             ]
             assert "Sof foyda:</b> 100 000" in all_report
-            assert "business profit: 105 000" in worker_report
-            assert "Worker xarajati: 10 000" in worker_report
+            assert "biznes foydasi: 105 000" in worker_report
+            assert "Ishchi xarajati: 10 000" in worker_report
             assert "1 soat 30 daqiqa" in worker_report
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_skip_share_uses_registered_percent_snapshot():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            order_id = (await add_group(sessions, count=1))[0]
+            callback = RecordingCallback(
+                f"order_share:default:{order_id}:{WORKER_ONE_ID}",
+                DIRECTOR_ID,
+                RecordingBot(),
+            )
+            await handler(router, "callback_query", "choose_order_share")(
+                callback, RecordingState()
+            )
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order.worker_share_type == "percent"
+                assert order.worker_share_value == Decimal("30.00")
+                assert order.worker_share_amount == Decimal("30000.00")
+                worker = await session.get(Worker, WORKER_ONE_ID)
+                worker.share_percent = Decimal("50")
+                await session.commit()
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order.worker_share_amount == Decimal("30000.00")
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_worker_finance_buttons_save_own_entries_with_registered_share():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            bot = RecordingBot()
+            for kind, amount, description in (
+                ("expense", "12000", "Kimyoviy vosita"),
+                ("income", "50000", "Polirovka"),
+            ):
+                state = RecordingState()
+                await handler(router, "callback_query", "start_worker_finance_from_cabinet")(
+                    RecordingCallback(f"cabinet_finance:{kind}", WORKER_ONE_ID, bot),
+                    state,
+                )
+                assert state.states[-1] == WorkerFinanceStates.waiting_amount
+                await handler(router, "message", "worker_finance_amount")(
+                    RecordingMessage(bot, WORKER_ONE_ID, amount), state
+                )
+                await handler(router, "message", "worker_finance_description")(
+                    RecordingMessage(bot, WORKER_ONE_ID, description), state
+                )
+                assert state.cleared is True
+            async with sessions() as session:
+                expense = await session.scalar(select(Expense))
+                income = await session.scalar(select(WorkerAdditionalIncome))
+                assert expense.worker_id == WORKER_ONE_ID
+                assert expense.amount == Decimal("12000")
+                assert income.worker_id == WORKER_ONE_ID
+                assert income.share_value == Decimal("30")
+                assert income.worker_amount == Decimal("15000")
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_operator_can_choose_manual_car_category_and_model():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            operator_id = 8200
+            async with sessions() as session:
+                session.add(User(telegram_id=operator_id, name="Operator", rol="operator"))
+                await session.commit()
+            bot = RecordingBot()
+            state = RecordingState()
+            category = "Sedan"
+            await handler(router, "callback_query", "manual_car_category")(
+                RecordingCallback(f"manual_category:{category}", operator_id, bot),
+                state,
+            )
+            assert state.states[-1] == ManualOrderStates.waiting_new_model
+            await handler(router, "callback_query", "manual_car_model")(
+                RecordingCallback("manual_model:sedan-cobalt", operator_id, bot),
+                state,
+            )
+            assert state.data["cars"][0]["car_model"] == "Chevrolet Cobalt"
+            assert state.states[-1] == ManualOrderStates.waiting_next_car
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_worker_completes_with_only_before_photo_and_skipped_comment():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions, worker_statuses=("band",))
+            async with sessions() as session:
+                order = Order(
+                    customer_id=CUSTOMER_ID,
+                    worker_id=WORKER_ONE_ID,
+                    car_category="Sedan",
+                    car_model="Cobalt",
+                    car_price=Decimal("50000"),
+                    status="yetib_keldi",
+                    arrived_at=datetime.now(worker_handlers.TASHKENT) - timedelta(minutes=20),
+                )
+                session.add(order)
+                await session.commit()
+                order_id = order.id
+            bot = RecordingBot()
+            state = RecordingState()
+            await handler(router, "callback_query", "update_worker_status")(
+                RecordingCallback(f"worker_status:complete:{order_id}", WORKER_ONE_ID, bot),
+                state,
+            )
+            assert state.states[-1] == WorkerCompletionStates.waiting_before_photo
+            photo_message = SimpleNamespace(
+                from_user=SimpleNamespace(id=WORKER_ONE_ID),
+                photo=[SimpleNamespace(file_id="photo-before")],
+                answer=RecordingMessage(bot, WORKER_ONE_ID).answer,
+            )
+            await handler(router, "message", "receive_before_photo")(photo_message, state)
+            assert state.states[-1] == WorkerCompletionStates.waiting_comment
+            await handler(router, "message", "complete_order")(
+                RecordingMessage(bot, WORKER_ONE_ID, "⏭️ O'tkazib yuborish"), state
+            )
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order.status == "yakunlandi"
+                assert order.plate_number is None
+                assert order.payment_method is None
+                assert order.after_photo_id is None
+                assert order.worker_comment is None
+            assert [call[2] for call in bot.calls if call[0] == "send_photo"] == ["photo-before"]
         finally:
             await engine.dispose()
 

@@ -141,6 +141,8 @@ MAIN_MENU_TEXTS = frozenset(
         "Operatorlarni boshqarish",
         "👤 Mening kabinetim",
         "Mening kabinetim",
+        "📉 Mening xarajatim",
+        "➕ Mening qo‘shimcha daromadim",
         "🟢 Ishga keldim",
         "Ishga keldim",
         "🔴 Ishdan ketdim",
@@ -551,37 +553,18 @@ def _new_router(
         message: Message,
         state: FSMContext,
     ) -> bool:
-        current_state = await state.get_state()
-        allowed_staff_flow = (
-            current_state
-            and (
-                current_state.startswith("ManualOrderStates:")
-                or current_state.startswith("CustomerHistoryStates:")
-                or current_state.startswith("AdditionalIncomeStates:")
-            )
-        )
-        if (
-            message.from_user is not None
-            and (
-                await director_allowed(message.from_user.id)
-                or (
-                    allowed_staff_flow
-                    and await staff_allowed(message.from_user.id)
-                )
-            )
-        ):
+        # This guard is used by the manual-order flow; operators may finish
+        # every step, including callbacks after selecting a car.
+        if message.from_user and await staff_allowed(message.from_user.id):
             return True
         await state.clear()
-        await message.answer("❌ Bu amal faqat direktor uchun.")
+        await message.answer("❌ Bu amal faqat direktor yoki operator uchun.")
         return False
 
     async def require_director_callback(callback: CallbackQuery) -> bool:
-        if (
-            callback.from_user is not None
-            and await director_allowed(callback.from_user.id)
-        ):
+        if callback.from_user and await staff_allowed(callback.from_user.id):
             return True
-        await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
+        await callback.answer("❌ Bu amal faqat direktor yoki operator uchun.", show_alert=True)
         return False
 
     async def crm_top_customers() -> list[tuple[User, int, Decimal]]:
@@ -1103,7 +1086,7 @@ def _new_router(
             async with session_factory() as session:
                 worker = await session.get(Worker, worker_id)
                 if not worker or not worker.active:
-                    await callback.answer("❌ Worker faol emas.", show_alert=True)
+                    await callback.answer("❌ Ishchi faol emas.", show_alert=True)
                     return
         else:
             await callback.answer("❌ Tugma ma’lumoti eskirgan.", show_alert=True)
@@ -2015,7 +1998,7 @@ def _new_router(
                     f"<b>🚗 Model:</b> {_safe(order.car_model)}\n"
                     f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number or 'Ishchi manzilda kiritadi')}\n"
                     f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-                    "<b>💳 To'lov:</b> Ishchi mijoz oldida aniqlaydi\n"
+                    "<b>💳 To'lov:</b> Ko‘rsatilmagan\n"
                     f"<b>🕔 Tashrif vaqti:</b> {_safe(_format_visit_at(order.visit_at))}\n"
                     f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
                     f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
@@ -2053,7 +2036,11 @@ def _new_router(
                 f"{len(orders)} ta mashina uchun buyurtma yaratildi. "
                 "Endi taqsimlash usulini tanlang."
             ),
-            reply_markup=director_menu_keyboard(),
+            reply_markup=(
+                director_menu_keyboard()
+                if await director_allowed(message.from_user.id)
+                else operator_menu_keyboard()
+            ),
         )
 
     @router.message(ManualOrderStates.waiting_comment, F.text)
@@ -2479,7 +2466,7 @@ def _new_router(
                 ).all()
             )
         if not workers:
-            await message.answer("📭 Faol workerlar topilmadi.")
+            await message.answer("📭 Faol ishchilar topilmadi.")
             return
         await state.clear()
         await message.answer(
@@ -2502,7 +2489,7 @@ def _new_router(
         async with session_factory() as session:
             worker = await session.get(Worker, worker_id)
         if worker is None or not worker.active:
-            await callback.answer("❌ Worker topilmadi.", show_alert=True)
+            await callback.answer("❌ Ishchi topilmadi.", show_alert=True)
             return
         await state.update_data(worker_id=worker_id)
         await state.set_state(AdditionalIncomeStates.waiting_description)
@@ -2539,7 +2526,7 @@ def _new_router(
             return
         await state.update_data(amount=str(amount))
         await message.answer(
-            "👷 Worker ulushi turini tanlang:",
+            "👷 Ishchi ulushi turini tanlang:",
             reply_markup=additional_income_share_keyboard(),
         )
 
@@ -2561,7 +2548,7 @@ def _new_router(
         await state.set_state(AdditionalIncomeStates.waiting_share_value)
         await callback.answer()
         await callback.message.answer(
-            "📊 Worker ulushini foiz yoki summada kiriting:"
+            "📊 Ishchi ulushini foiz yoki summada kiriting:"
         )
 
     @router.message(AdditionalIncomeStates.waiting_share_value, F.text)
@@ -2586,7 +2573,7 @@ def _new_router(
             amount * value / Decimal("100") if share_type == "percent" else value
         )
         if worker_amount > amount:
-            await message.answer("❌ Worker ulushi umumiy daromaddan oshmasin.")
+            await message.answer("❌ Ishchi ulushi umumiy daromaddan oshmasin.")
             return
         async with session_factory() as session:
             session.add(
@@ -2611,7 +2598,7 @@ def _new_router(
         await message.answer(
             f"✅ Qo‘shimcha daromad saqlandi: {_safe(data['description'])}\n"
             f"Umumiy: {_safe(format_price(int(amount)))} | "
-            f"Worker ulushi: {_safe(format_price(int(worker_amount)))}",
+            f"Ishchi ulushi: {_safe(format_price(int(worker_amount)))}",
             reply_markup=menu,
         )
 
@@ -2660,7 +2647,7 @@ def _new_router(
                 session.add(user)
             elif await session.get(Worker, user_id) is not None or user.rol == "direktor":
                 await state.clear()
-                await message.answer("❌ Worker yoki direktor operator bo‘la olmaydi.")
+                await message.answer("❌ Ishchi yoki direktor operator bo‘la olmaydi.")
                 return
             else:
                 user.rol = "operator"
@@ -2684,7 +2671,7 @@ def _new_router(
                 await callback.answer("❌ Operator topilmadi.", show_alert=True)
                 return
             if await session.get(Worker, user_id) is not None:
-                await callback.answer("❌ Worker roli ustun.", show_alert=True)
+                await callback.answer("❌ Ishchi roli ustun.", show_alert=True)
                 return
             user.rol = "mijoz"
             await session.commit()

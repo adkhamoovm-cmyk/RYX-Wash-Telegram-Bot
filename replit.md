@@ -42,12 +42,12 @@ Telegram bot that registers car wash customers and sends new service orders to t
 ## Product
 
 Customers register with their name and Telegram contact, select a car and payment method, share a service location, and create an order. The director receives order details and a Telegram location.
-The director can register workers and assign orders to available staff. Workers manage shifts, accept or reject assignments, report progress, and finish with before/after photos.
+The director can register workers and assign orders to available staff. Skipping an order-share override snapshots the worker's registered percentage. Workers manage shifts, accept or reject assignments, report progress, and finish with one "before" photo and an optional comment; plate and payment are not required during completion.
 Worker offers expire after three minutes even across bot restarts. Directors and assigned workers can cancel active orders with a required reason.
 When everyone is busy, orders can enter a global FIFO queue or a worker-specific queue. A worker never receives a second active order; queued details open only after the current order ends.
 The director can create phone-call orders manually. These require a plate and reference car photo, accept either Telegram coordinates or a written address, and reuse customers by normalized phone number.
 Customers can save multiple vehicles and create grouped requests. Each car is a separate order row linked by `order_group_id`; a whole group can be queued for one worker or split across workers.
-The director can add expenses, run date/worker-filtered financial reports, and manage catalog prices. A persistent APScheduler cron sends the daily report at 21:00 Tashkent time.
+The director can add expenses, run date/worker-filtered financial reports, and manage catalog prices. Workers can add their own expenses and additional income; additional income uses their registered percentage. Operators can create manual orders through all car-selection steps. A persistent APScheduler cron sends the daily report at 21:00 Tashkent time.
 
 ## Gotchas
 

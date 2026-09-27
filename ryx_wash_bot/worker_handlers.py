@@ -33,6 +33,7 @@ from .keyboards import (
     worker_order_decision_keyboard,
     worker_payment_keyboard,
     worker_status_keyboard,
+    skip_comment_keyboard,
 )
 from .models import Cancellation, Order, User, Worker, WorkerAdditionalIncome, Expense
 from .reports import period_bounds
@@ -46,6 +47,7 @@ from .states import (
     WorkerOrderStates,
     WorkerCompletionStates,
     WorkerRegistrationStates,
+    WorkerFinanceStates,
 )
 
 logger = logging.getLogger(__name__)
@@ -115,6 +117,11 @@ def _format_eta_time(value: datetime) -> str:
 def _duration_text(start: datetime | None, end: datetime | None) -> str:
     if not start or not end:
         return "—"
+    # SQLite drops timezone info on read; PostgreSQL returns aware timestamps.
+    if start.tzinfo is None:
+        start = start.replace(tzinfo=TASHKENT)
+    if end.tzinfo is None:
+        end = end.replace(tzinfo=TASHKENT)
     seconds = max(0, int((end - start).total_seconds()))
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
@@ -184,34 +191,17 @@ def _register_user_routes(
             return True
         if order.status != "yakunlanmoqda":
             return False
-        if not order.plate_number:
-            await state.set_state(WorkerOrderStates.waiting_plate)
-            await message.answer(
-                f"🪪 Buyurtma #{order.id} yakunlanmoqda. Davlat raqamini kiriting:",
-                reply_markup=ReplyKeyboardRemove(),
-            )
-        elif not order.payment_method:
-            await state.set_state(WorkerOrderStates.waiting_payment)
-            await message.answer(
-                f"💳 Buyurtma #{order.id} uchun mijoz oldidagi to‘lov turini tanlang:",
-                reply_markup=worker_payment_keyboard(order.id),
-            )
-        elif not order.before_photo_id:
+        if not order.before_photo_id:
             await state.set_state(WorkerCompletionStates.waiting_before_photo)
             await message.answer(
                 f"📷 Buyurtma #{order.id} uchun «Oldin» rasmini yuboring:",
                 reply_markup=ReplyKeyboardRemove(),
             )
-        elif not order.after_photo_id:
-            await state.set_state(WorkerCompletionStates.waiting_after_photo)
-            await message.answer(
-                f"📷 Buyurtma #{order.id} uchun «Keyin» rasmini yuboring:",
-                reply_markup=ReplyKeyboardRemove(),
-            )
         else:
             await state.set_state(WorkerCompletionStates.waiting_comment)
             await message.answer(
-                f"📝 Buyurtma #{order.id} bo‘yicha yakuniy izohni yuboring:"
+                f"📝 Buyurtma #{order.id} bo‘yicha izoh yuboring yoki o'tkazib yuboring:",
+                reply_markup=skip_comment_keyboard(),
             )
         return True
 
@@ -340,9 +330,9 @@ def _register_user_routes(
             f"{_safe(format_price(int(sum((Decimal(item.amount) for item in additional), Decimal('0')))))}",
             f"<b>➕ Qo‘shimcha ulush:</b> "
             f"{_safe(format_price(int(sum((Decimal(item.worker_amount) for item in additional), Decimal('0')))))}",
-            f"<b>📉 Worker xarajati:</b> "
+            f"<b>📉 Ishchi xarajati:</b> "
             f"{_safe(format_price(int(Decimal(str(worker_expense or 0)))))}",
-            f"<b>💰 Worker foydasi:</b> "
+            f"<b>💰 Ishchi bo‘yicha foyda:</b> "
             f"{_safe(format_price(int(worker_profit)))}",
             "",
             f"<b>🕒 Joriy smena:</b> "
@@ -371,9 +361,115 @@ def _register_user_routes(
                 lines.append(
                     f"• {_safe(item.description)} — "
                     f"{_safe(format_price(int(item.amount)))} | "
-                    f"worker ulushi: {_safe(format_price(int(item.worker_amount)))}"
+                    f"ishchi ulushi: {_safe(format_price(int(item.worker_amount)))}"
                 )
         return "\n".join(lines)
+
+    @router.message(F.text.in_({"📉 Mening xarajatim", "➕ Mening qo‘shimcha daromadim"}))
+    async def start_worker_finance(message: Message, state: FSMContext) -> None:
+        if not message.from_user:
+            return
+        async with sessions() as session:
+            worker = await get_worker(session, message.from_user.id)
+            if not worker or not worker.active:
+                await message.answer("❌ Bu bo‘lim faqat faol ishchilar uchun.")
+                return
+        await state.clear()
+        await state.update_data(
+            finance_kind="expense" if message.text == "📉 Mening xarajatim" else "income"
+        )
+        await state.set_state(WorkerFinanceStates.waiting_amount)
+        await message.answer("💰 Summani so‘mda kiriting (masalan, 50000):")
+
+    @router.callback_query(F.data.startswith("cabinet_finance:"))
+    async def start_worker_finance_from_cabinet(
+        callback: CallbackQuery, state: FSMContext
+    ) -> None:
+        if not callback.from_user or callback.data not in {
+            "cabinet_finance:expense", "cabinet_finance:income"
+        }:
+            await callback.answer("❌ Tugma ma’lumoti eskirgan.", show_alert=True)
+            return
+        async with sessions() as session:
+            worker = await get_worker(session, callback.from_user.id)
+            if not worker or not worker.active:
+                await callback.answer("❌ Bu bo‘lim faqat faol ishchilar uchun.", show_alert=True)
+                return
+        await state.clear()
+        await state.update_data(finance_kind=callback.data.split(":")[1])
+        await state.set_state(WorkerFinanceStates.waiting_amount)
+        await callback.answer()
+        await callback.message.answer("💰 Summani so‘mda kiriting (masalan, 50000):")
+
+    @router.message(WorkerFinanceStates.waiting_amount, F.text)
+    async def worker_finance_amount(message: Message, state: FSMContext) -> None:
+        if not message.from_user:
+            return
+        data = await state.get_data()
+        if data.get("finance_kind") not in {"expense", "income"}:
+            await state.clear()
+            await message.answer("❌ Ma’lumot topilmadi. Qaytadan boshlang.")
+            return
+        try:
+            amount = Decimal(message.text.strip().replace(" ", "").replace(",", "."))
+        except (InvalidOperation, ValueError):
+            amount = None
+        if amount is None or not amount.is_finite() or amount <= 0 or amount > Decimal("9999999999.99"):
+            await message.answer("❌ Musbat summa kiriting (masalan, 50000).")
+            return
+        await state.update_data(finance_amount=str(amount.quantize(Decimal("0.01"))))
+        await state.set_state(WorkerFinanceStates.waiting_description)
+        await message.answer("📝 Qisqa tavsif yozing:")
+
+    @router.message(WorkerFinanceStates.waiting_description, F.text)
+    async def worker_finance_description(message: Message, state: FSMContext) -> None:
+        if not message.from_user:
+            return
+        description = " ".join(message.text.split())
+        if not description or len(description) > 500:
+            await message.answer("❌ Tavsif 1–500 belgi bo‘lsin.")
+            return
+        data = await state.get_data()
+        if data.get("finance_kind") not in {"expense", "income"} or not data.get("finance_amount"):
+            await state.clear()
+            await message.answer("❌ Ma’lumot topilmadi. Qaytadan boshlang.")
+            return
+        amount = Decimal(data["finance_amount"])
+        async with sessions() as session:
+            worker = await get_worker(session, message.from_user.id)
+            if not worker or not worker.active:
+                await state.clear()
+                await message.answer("❌ Ishchi faol emas.")
+                return
+            if data["finance_kind"] == "expense":
+                session.add(Expense(
+                    worker_id=worker.user_id,
+                    amount=amount,
+                    description=description,
+                    spent_at=now_tashkent(),
+                    created_by=message.from_user.id,
+                ))
+                label = "Xarajat"
+            else:
+                percent = Decimal(worker.share_percent)
+                session.add(WorkerAdditionalIncome(
+                    worker_id=worker.user_id,
+                    amount=amount,
+                    description=description,
+                    share_type="percent",
+                    share_value=percent,
+                    worker_amount=(amount * percent / Decimal("100")).quantize(Decimal("0.01")),
+                    occurred_at=now_tashkent(),
+                    created_by=message.from_user.id,
+                ))
+                label = "Qo‘shimcha daromad"
+            await session.commit()
+        await state.clear()
+        await message.answer(
+            f"✅ {label} saqlandi: {_safe(format_price(int(amount)))}\n"
+            f"📝 {_safe(description)}",
+            reply_markup=worker_menu_keyboard(),
+        )
 
     @router.message(F.text.in_({"👤 Mening kabinetim", "Mening kabinetim"}))
     async def show_worker_cabinet(
@@ -843,7 +939,7 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            "👷 Worker ulushini tanlang:",
+            "👷 Ishchi ulushini tanlang (o'tkazib yuborish — mavjud foiz):",
             reply_markup=order_share_keyboard(
                 lead_order_id, worker_id, prefix="group_share"
             ),
@@ -1466,7 +1562,7 @@ def _register_user_routes(
         await callback.answer()
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.message.answer(
-            "👷 Worker ulushini tanlang:",
+            "👷 Ishchi ulushini tanlang (o'tkazib yuborish — mavjud foiz):",
             reply_markup=order_share_keyboard(
                 order_id, worker_id, prefix="busy_share"
             ),
@@ -1777,21 +1873,23 @@ def _register_user_routes(
         share_type, order_raw, worker_raw = parts
         order_id = _positive_int(order_raw)
         worker_id = _positive_int(worker_raw)
-        if share_type not in {"percent", "amount", "none"} or not order_id or not worker_id:
+        if share_type not in {"percent", "amount", "default", "none"} or not order_id or not worker_id:
             await callback.answer("❌ Ulush ma’lumoti noto‘g‘ri.", show_alert=True)
             return
-        if share_type == "none":
+        if share_type in {"default", "none"}:
+            async with sessions() as session:
+                worker = await session.get(Worker, worker_id)
+                if worker is None:
+                    await callback.answer("❌ Ishchi topilmadi.", show_alert=True)
+                    return
+                default_percent = Decimal(worker.share_percent)
             if not await assign_order_with_share(
-                order_id,
-                worker_id,
-                "none",
-                Decimal("0"),
-                callback.bot,
+                order_id, worker_id, "percent", default_percent, callback.bot,
                 group=prefix == "group_share",
             ):
                 await callback.answer("⚠️ Buyurtma holati o‘zgargan.", show_alert=True)
                 return
-            await callback.answer("✅ Ulushsiz yuborildi.")
+            await callback.answer("✅ Ishchining foizi bilan yuborildi.")
             return
         await state.update_data(
             assignment_kind=(
@@ -1806,7 +1904,7 @@ def _register_user_routes(
         await state.set_state(DirectorAssignmentStates.waiting_share_value)
         await callback.answer()
         await callback.message.answer(
-            "📊 Worker ulushini foiz yoki summada kiriting:"
+            "📊 Ishchi ulushini foiz yoki summada kiriting:"
         )
 
     @router.message(DirectorAssignmentStates.waiting_share_value, F.text)
@@ -2347,25 +2445,10 @@ def _register_user_routes(
                     await state.set_state(WorkerCompletionStates.waiting_before_photo)
                     await state.update_data(order_id=order_id)
                     await callback.message.edit_reply_markup(reply_markup=None)
-                    if not order.plate_number:
-                        await state.set_state(WorkerOrderStates.waiting_plate)
-                        await callback.message.answer(
-                            "✅ Ish yakunlandi. Endi mashinaning davlat raqamini "
-                            "kiriting:",
-                            reply_markup=ReplyKeyboardRemove(),
-                        )
-                    elif not order.payment_method:
-                        await state.set_state(WorkerOrderStates.waiting_payment)
-                        await callback.message.answer(
-                            "✅ Ish yakunlandi. Mijoz oldidagi to‘lov turini "
-                            "tanlang:",
-                            reply_markup=worker_payment_keyboard(order_id),
-                        )
-                    else:
-                        await callback.message.answer(
-                            "✅ Ish tugadi. Birinchi rasmni yuboring (Oldin):",
-                            reply_markup=ReplyKeyboardRemove(),
-                        )
+                    await callback.message.answer(
+                        "✅ Ish tugadi. «Oldin» rasmini yuboring:",
+                        reply_markup=ReplyKeyboardRemove(),
+                    )
                     await callback.answer()
                     return
                 await callback.answer("❌ Noto'g'ri status.", show_alert=True)
@@ -2623,8 +2706,6 @@ def _register_user_routes(
                 not order
                 or not worker
                 or order.status != "yakunlanmoqda"
-                or not order.plate_number
-                or not order.payment_method
                 or order.before_photo_id is not None
             ):
                 await state.clear()
@@ -2635,8 +2716,11 @@ def _register_user_routes(
             order.before_photo_id = photo_id
             await session.commit()
         await state.update_data(before_photo_id=photo_id)
-        await state.set_state(WorkerCompletionStates.waiting_after_photo)
-        await message.answer("📷 Endi ikkinchi rasmni yuboring (Keyin):")
+        await state.set_state(WorkerCompletionStates.waiting_comment)
+        await message.answer(
+            "📝 Ish bo'yicha qisqa izoh yozing yoki o'tkazib yuboring:",
+            reply_markup=skip_comment_keyboard(),
+        )
 
     @router.message(WorkerCompletionStates.waiting_after_photo, F.photo)
     async def receive_after_photo(message: Message, state: FSMContext) -> None:
@@ -2658,8 +2742,6 @@ def _register_user_routes(
                 or not worker
                 or order.status != "yakunlanmoqda"
                 or not order.before_photo_id
-                or not order.plate_number
-                or not order.payment_method
                 or order.after_photo_id is not None
             ):
                 await state.clear()
@@ -2671,7 +2753,10 @@ def _register_user_routes(
             await session.commit()
         await state.update_data(after_photo_id=photo_id)
         await state.set_state(WorkerCompletionStates.waiting_comment)
-        await message.answer("📝 Ish bo'yicha qisqa izoh yuboring:")
+        await message.answer(
+            "📝 Ish bo'yicha qisqa izoh yozing yoki o'tkazib yuboring:",
+            reply_markup=skip_comment_keyboard(),
+        )
 
     @router.message(WorkerCompletionStates.waiting_before_photo)
     async def require_before_photo(message: Message) -> None:
@@ -2692,8 +2777,10 @@ def _register_user_routes(
             await message.answer("❌ Buyurtma ma'lumoti topilmadi.")
             return
         comment = message.text.strip()
-        if not comment or len(comment) > 2000:
-            await message.answer("❌ Qisqa izoh 1–2000 belgi bo'lishi kerak.")
+        if comment in {"⏭️ O'tkazib yuborish", "O'tkazib yuborish"}:
+            comment = ""
+        if len(comment) > 2000:
+            await message.answer("❌ Izoh 2000 belgidan oshmasin.")
             return
         async with sessions() as session:
             order = await session.get(Order, order_id, with_for_update=True)
@@ -2707,26 +2794,17 @@ def _register_user_routes(
                 await state.clear()
                 await message.answer("❌ Buyurtma topilmadi yoki sizga tegishli emas.")
                 return
-            if not order.before_photo_id or not order.after_photo_id:
+            if not order.before_photo_id:
                 await state.clear()
                 await state.update_data(order_id=order.id)
-                if not order.before_photo_id:
-                    await state.set_state(
-                        WorkerCompletionStates.waiting_before_photo
-                    )
-                    prompt = "📷 Avval «Oldin» rasmini yuboring:"
-                else:
-                    await state.set_state(
-                        WorkerCompletionStates.waiting_after_photo
-                    )
-                    prompt = "📷 Endi «Keyin» rasmini yuboring:"
-                await message.answer(prompt, reply_markup=ReplyKeyboardRemove())
+                await state.set_state(WorkerCompletionStates.waiting_before_photo)
+                await message.answer("📷 Avval «Oldin» rasmini yuboring:", reply_markup=ReplyKeyboardRemove())
                 return
             customer = await session.get(User, order.customer_id)
             completed_at = now_tashkent()
             order.status = "yakunlandi"
             order.completed_at = completed_at
-            order.worker_comment = comment
+            order.worker_comment = comment or None
             worker.status = "bo'sh"
             duration = _duration_text(order.arrived_at, completed_at)
             report = (
@@ -2735,16 +2813,15 @@ def _register_user_routes(
                  f"<b>👤 Mijoz:</b> {_safe(customer.name if customer else '—')} "
                 f"({_safe(customer.phone if customer else '—')})\n"
                  f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
-                 f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
+                 f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number or 'Ko‘rsatilmagan')}\n"
                  f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
                  f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-            f"<b>💳 To'lov:</b> {_safe(_payment_display(order.payment_method))}\n"
+            f"<b>💳 To'lov:</b> {_safe(order.payment_method or 'Ko‘rsatilmagan')}\n"
                  f"<b>⏱️ Ish davomiyligi:</b> {_safe(duration)}\n"
-                 f"<b>📝 Izoh:</b> {_safe(comment)}"
+                 f"<b>📝 Izoh:</b> {_safe(comment or '—')}"
             )
             await session.commit()
             before_photo_id = order.before_photo_id
-            after_photo_id = order.after_photo_id
             customer_id = order.customer_id
         await state.clear()
         await message.answer(
@@ -2756,11 +2833,6 @@ def _register_user_routes(
             settings.director_id,
             before_photo_id,
             caption="📷 Oldin",
-        )
-        await message.bot.send_photo(
-            settings.director_id,
-            after_photo_id,
-            caption="📷 Keyin",
         )
         await notify_customer(
             message.bot,

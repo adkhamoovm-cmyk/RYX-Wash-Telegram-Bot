@@ -93,6 +93,11 @@ class WorkerCompletionStates(StatesGroup):
     waiting_comment = State()
 
 
+class WorkerFinanceStates(StatesGroup):
+    waiting_amount = State()
+    waiting_description = State()
+
+
 class CancellationStates(StatesGroup):
     waiting_reason = State()
     waiting_custom_reason = State()

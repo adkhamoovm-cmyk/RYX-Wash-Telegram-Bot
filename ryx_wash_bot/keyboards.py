@@ -89,7 +89,7 @@ def expense_items_keyboard(expenses: list):
         label = (
             f"{date_text} | {format_price(int(expense.amount))} | "
             f"{expense.description} | "
-            f"{'Umumiy' if expense.worker_id is None else f'Worker #{expense.worker_id}'}"
+            f"{'Umumiy' if expense.worker_id is None else f'Ishchi #{expense.worker_id}'}"
         )
         builder.button(
             text=f"✏️ {label}"[:60],
@@ -223,6 +223,10 @@ def worker_menu_keyboard() -> ReplyKeyboardMarkup:
     builder = ReplyKeyboardBuilder()
     builder.add(KeyboardButton(text="👤 Mening kabinetim"))
     builder.row(
+        KeyboardButton(text="📉 Mening xarajatim"),
+        KeyboardButton(text="➕ Mening qo‘shimcha daromadim"),
+    )
+    builder.row(
         KeyboardButton(text="🟢 Ishga keldim"),
         KeyboardButton(text="🔴 Ishdan ketdim"),
     )
@@ -234,7 +238,9 @@ def worker_cabinet_period_keyboard():
     builder.button(text="📅 Bugun", callback_data="cabinet_period:today")
     builder.button(text="📅 Shu hafta", callback_data="cabinet_period:week")
     builder.button(text="📅 Shu oy", callback_data="cabinet_period:month")
-    builder.adjust(3)
+    builder.button(text="📉 Xarajat qo'shish", callback_data="cabinet_finance:expense")
+    builder.button(text="➕ Qo‘shimcha daromad", callback_data="cabinet_finance:income")
+    builder.adjust(3, 2)
     return builder.as_markup()
 
 
@@ -529,7 +535,7 @@ def order_share_keyboard(order_id: int, worker_id: int, prefix: str = "order_sha
     builder = InlineKeyboardBuilder()
     builder.button(text="📊 Foiz", callback_data=f"{prefix}:percent:{order_id}:{worker_id}")
     builder.button(text="💵 Aniq summa", callback_data=f"{prefix}:amount:{order_id}:{worker_id}")
-    builder.button(text="⏭️ Ulushsiz", callback_data=f"{prefix}:none:{order_id}:{worker_id}")
+    builder.button(text="⏭️ O'tkazib yuborish", callback_data=f"{prefix}:default:{order_id}:{worker_id}")
     builder.adjust(2, 1)
     return builder.as_markup()
 

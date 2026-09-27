@@ -213,13 +213,12 @@ async def build_financial_report(
         header += (
             f"\n\n<b>👷 {_safe(worker.name)} hisoboti</b>\n"
             f"• 📈 O‘rtacha chek: {_money(average_check)}\n"
-            f"• 💼 Worker payout "
-            f"({_percent(worker.share_percent)}%): "
+            f"• 💼 Ishchiga to‘lov: "
             f"{_money(worker_share)}\n"
             f"• ➕ Qo‘shimcha daromad: {_money(worker_additional_gross)}\n"
             f"• ➕ Qo‘shimcha ulush: {_money(worker_additional_earnings)}\n"
-            f"• 📉 Worker xarajati: {_money(worker_expense)}\n"
-            f"• 💰 Worker-attributable business profit: {_money(worker_profit)}"
+            f"• 📉 Ishchi xarajati: {_money(worker_expense)}\n"
+            f"• 💰 Ishchi bo‘yicha biznes foydasi: {_money(worker_profit)}"
         )
     else:
         header += (
@@ -234,7 +233,7 @@ async def build_financial_report(
         detail_lines.extend(
             f"• {_safe(expense.description)} — "
             f"{_money(Decimal(expense.amount))} | "
-            f"{'Umumiy' if expense.worker_id is None else f'Worker #{expense.worker_id}'}"
+            f"{'Umumiy' if expense.worker_id is None else f'Ishchi #{expense.worker_id}'}"
             for expense in expenses
         )
     if cancellations:
@@ -338,8 +337,8 @@ async def build_financial_report(
                     f"{_money(worker_share)}",
                     f"• ➕ Qo‘shimcha daromad: {_money(worker_additional_gross)}",
                     f"• ➕ Qo‘shimcha ulush: {_money(worker_additional_earnings)}",
-                    f"• 📉 Worker xarajati: {_money(worker_expense)}",
-                    f"• 💰 Worker foydasi: {_money(worker_profit)}",
+                    f"• 📉 Ishchi xarajati: {_money(worker_expense)}",
+                    f"• 💰 Ishchi bo‘yicha foyda: {_money(worker_profit)}",
                 ]
             )
             if worker_orders:
