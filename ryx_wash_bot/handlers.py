@@ -223,6 +223,7 @@ async def send_group_summary(
     orders: list[Order],
     group_id: str,
     recipient_id: int | None = None,
+    assignment_actions: bool = True,
 ) -> None:
     """Send a grouped order without exceeding Telegram's message limit."""
     recipient_id = recipient_id if recipient_id is not None else settings.director_id
@@ -246,18 +247,19 @@ async def send_group_summary(
         for index, order in enumerate(orders, 1)
     ]
     full_text = header + "\n\n" + "\n".join(lines)
+    markup = group_mode_keyboard(group_id, orders[0].id) if assignment_actions else None
     if len(full_text) <= 4000:
         await bot.send_message(
             recipient_id,
             full_text,
-            reply_markup=group_mode_keyboard(group_id, orders[0].id),
+            reply_markup=markup,
         )
         return
 
     await bot.send_message(
         recipient_id,
         header + "\n\nRo'yxat keyingi xabarlarda davom etadi.",
-        reply_markup=group_mode_keyboard(group_id, orders[0].id),
+        reply_markup=markup,
     )
     chunk: list[str] = []
     chunk_length = 0
@@ -1937,6 +1939,13 @@ def _new_router(
                 reply_markup=director_menu_keyboard(),
             )
             return
+        if not message.from_user:
+            return
+        creator_id = message.from_user.id
+        operator_created = not await director_allowed(creator_id)
+        recipients = [creator_id]
+        if operator_created:
+            recipients.append(settings.director_id)
         async with session_factory() as session:
             customer = await session.get(User, customer_id)
             if customer is None:
@@ -1993,7 +2002,7 @@ def _new_router(
             bot = message.bot
             if len(orders) == 1:
                 order = orders[0]
-                director_text = (
+                summary_text = (
                     f"<b>📝 Qo'lda kiritilgan buyurtma #{order.id}</b>\n\n"
                     f"<b>👤 Mijoz:</b> {_safe(customer.name)}\n"
                     f"<b>📞 Telefon:</b> {_safe(customer.phone)}\n"
@@ -2006,39 +2015,48 @@ def _new_router(
                     f"<b>📍 Manzil:</b> {_safe(order.address or 'Telegram lokatsiyasi')}\n"
                     f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
                 )
-                await bot.send_message(
-                    settings.director_id,
-                    director_text,
-                    reply_markup=new_order_assignment_keyboard(order.id),
-                )
+                for recipient_id in recipients:
+                    await bot.send_message(
+                        recipient_id,
+                        summary_text,
+                        reply_markup=(
+                            new_order_assignment_keyboard(order.id)
+                            if recipient_id == creator_id else None
+                        ),
+                    )
             else:
-                await send_group_summary(
-                    bot,
-                    settings,
-                    "Qo'lda kiritilgan guruh buyurtmasi",
-                    customer,
-                    orders,
-                    group_id,
-                )
-            if orders[0].latitude is not None and orders[0].longitude is not None:
-                await bot.send_location(
-                    settings.director_id,
-                    latitude=float(orders[0].latitude),
-                    longitude=float(orders[0].longitude),
-                )
-            else:
-                await bot.send_message(
-                    settings.director_id,
-                    f"<b>📍 Qo'lda kiritilgan manzil:</b> {_safe(orders[0].address)}",
-                    parse_mode=ParseMode.HTML,
-                )
+                for recipient_id in recipients:
+                    await send_group_summary(
+                        bot,
+                        settings,
+                        "Qo'lda kiritilgan guruh buyurtmasi",
+                        customer,
+                        orders,
+                        group_id,
+                        recipient_id=recipient_id,
+                        assignment_actions=recipient_id == creator_id,
+                    )
+            for recipient_id in recipients:
+                if orders[0].latitude is not None and orders[0].longitude is not None:
+                    await bot.send_location(
+                        recipient_id,
+                        latitude=float(orders[0].latitude),
+                        longitude=float(orders[0].longitude),
+                    )
+                else:
+                    await bot.send_message(
+                        recipient_id,
+                        f"<b>📍 Qo'lda kiritilgan manzil:</b> {_safe(orders[0].address)}",
+                        parse_mode=ParseMode.HTML,
+                    )
 
         await state.clear()
         await message.answer(
             (
                 f"✅ {len(orders)} ta mashina uchun buyurtma yaratildi. "
-                "Direktor tasdig‘i talab qilinmaydi. "
-                "Ishchiga taqsimlash direktorga yuborildi."
+                + ("Direktor tasdig‘i talab qilinmaydi. " if operator_created else "")
+                + "Ishchiga biriktirish tugmasi sizga yuborildi."
+                + (" Direktor buyurtma haqida xabar oldi." if operator_created else "")
             ),
             reply_markup=(
                 director_menu_keyboard()

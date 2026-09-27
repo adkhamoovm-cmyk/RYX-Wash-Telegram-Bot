@@ -2232,11 +2232,78 @@ def test_operator_creates_manual_order_without_director_approval():
                 orders = list((await session.scalars(select(Order))).all())
                 assert len(orders) == 1
                 assert orders[0].status == "yangi"
+                order_id = orders[0].id
             assert state.cleared
             assert any("Direktor tasdig‘i talab qilinmaydi" in str(text)
                        for text, _ in message.answer_calls)
-            assert any(call[1] == DIRECTOR_ID and "Qo'lda kiritilgan" in call[2]
-                       for call in bot.calls if call[0] == "send_message")
+            summaries = [call for call in bot.calls
+                         if call[0] == "send_message" and "Qo'lda kiritilgan buyurtma" in call[2]]
+            assert {call[1] for call in summaries} == {operator_id, DIRECTOR_ID}
+            assert next(call for call in summaries if call[1] == DIRECTOR_ID)[3]["reply_markup"] is None
+            assert next(call for call in summaries if call[1] == operator_id)[3]["reply_markup"] is not None
+            await handler(router, "callback_query", "show_available_workers")(
+                RecordingCallback(f"assign_workers:{order_id}", operator_id, bot)
+            )
+            await handler(router, "callback_query", "choose_wash_duration")(
+                RecordingCallback(f"assign_worker:{order_id}:{WORKER_ONE_ID}", operator_id, bot)
+            )
+            await handler(router, "callback_query", "choose_order_share")(
+                RecordingCallback(
+                    f"order_share:default:{order_id}:{WORKER_ONE_ID}", operator_id, bot
+                ),
+                RecordingState(),
+            )
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order.worker_id == WORKER_ONE_ID
+                assert order.status == "ishchiga_yuborildi"
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_operator_manual_group_can_split_without_director_action():
+    async def scenario():
+        engine, sessions, _settings, _scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            operator_id = 8200
+            async with sessions() as session:
+                session.add(User(telegram_id=operator_id, name="Operator", rol="operator"))
+                await session.commit()
+            bot = RecordingBot()
+            state = RecordingState({
+                "customer_id": CUSTOMER_ID,
+                "cars": [
+                    {"car_category": "Sedan", "car_model": model,
+                     "car_price": 50000, "plate_number": None}
+                    for model in ("Cobalt", "Nexia")
+                ],
+                "visit_at": (datetime.now(worker_handlers.TASHKENT) + timedelta(hours=2)).isoformat(),
+                "address": "Toshkent",
+            })
+            await handler(router, "message", "manual_comment")(
+                RecordingMessage(bot, operator_id, "⏭️ O'tkazib yuborish"), state
+            )
+            async with sessions() as session:
+                orders = list((await session.scalars(select(Order).order_by(Order.id))).all())
+                assert len(orders) == 2
+                group_id = orders[0].order_group_id
+                lead_id = orders[0].id
+            summaries = [call for call in bot.calls
+                         if call[0] == "send_message" and "guruh buyurtmasi" in call[2]]
+            assert {call[1] for call in summaries} == {operator_id, DIRECTOR_ID}
+            assert next(call for call in summaries if call[1] == DIRECTOR_ID)[3]["reply_markup"] is None
+            assert next(call for call in summaries if call[1] == operator_id)[3]["reply_markup"] is not None
+            await handler(router, "callback_query", "split_group_orders")(
+                RecordingCallback(f"group_split:{group_id}:{lead_id}", operator_id, bot)
+            )
+            async with sessions() as session:
+                orders = list((await session.scalars(select(Order).order_by(Order.id))).all())
+                assert all(order.group_mode == "split" for order in orders)
+            assert not any(call[1] == DIRECTOR_ID and "📋 Buyurtma #" in call[2]
+                           for call in bot.calls if call[0] == "send_message")
         finally:
             await engine.dispose()
 
