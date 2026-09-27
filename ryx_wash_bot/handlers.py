@@ -78,6 +78,7 @@ from .states import (
     AdditionalIncomeStates,
     OperatorStates,
 )
+from .scheduler import schedule_operator_review, escalate_unassigned_order
 from .worker_handlers import register_worker_routes
 
 logger = logging.getLogger(__name__)
@@ -221,8 +222,10 @@ async def send_group_summary(
     customer: User,
     orders: list[Order],
     group_id: str,
+    recipient_id: int | None = None,
 ) -> None:
     """Send a grouped order without exceeding Telegram's message limit."""
+    recipient_id = recipient_id if recipient_id is not None else settings.director_id
     total = sum(int(order.car_price) for order in orders)
     header = (
         f"<b>📋 {_safe(title)}</b>\n\n"
@@ -245,14 +248,14 @@ async def send_group_summary(
     full_text = header + "\n\n" + "\n".join(lines)
     if len(full_text) <= 4000:
         await bot.send_message(
-            settings.director_id,
+            recipient_id,
             full_text,
             reply_markup=group_mode_keyboard(group_id, orders[0].id),
         )
         return
 
     await bot.send_message(
-        settings.director_id,
+        recipient_id,
         header + "\n\nRo'yxat keyingi xabarlarda davom etadi.",
         reply_markup=group_mode_keyboard(group_id, orders[0].id),
     )
@@ -260,13 +263,13 @@ async def send_group_summary(
     chunk_length = 0
     for line in lines:
         if chunk and chunk_length + len(line) + 1 > 3800:
-            await bot.send_message(settings.director_id, "\n".join(chunk))
+            await bot.send_message(recipient_id, "\n".join(chunk))
             chunk = []
             chunk_length = 0
         chunk.append(line)
         chunk_length += len(line) + 1
     if chunk:
-        await bot.send_message(settings.director_id, "\n".join(chunk))
+        await bot.send_message(recipient_id, "\n".join(chunk))
 
 
 def _new_router(
@@ -2391,46 +2394,58 @@ def _new_router(
             for order in orders:
                 await session.refresh(order)
 
-            try:
-                bot = message.bot
-                if len(orders) == 1:
-                    order = orders[0]
-                    director_text = (
-                        f"<b>🆕 Yangi buyurtma #{order.id}</b>\n\n"
-                        f"<b>👤 Mijoz:</b> {_safe(user.name)}\n"
-                        f"<b>📞 Telefon:</b> {_safe(user.phone)}\n"
-                        f"<b>🚗 Kategoriya:</b> {_safe(order.car_category)}\n"
-                        f"<b>🚗 Model:</b> {_safe(order.car_model)}\n"
-                        f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
-                        f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
-                        f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
-                        f"<b>💳 To'lov:</b> {_safe(order.payment_method)}\n"
-                        f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
+            operator_ids = list((await session.scalars(
+                select(User.telegram_id).where(User.rol == "operator")
+            )).all())
+            bot = message.bot
+            notified = False
+            for recipient_id in operator_ids or [settings.director_id]:
+                try:
+                    if len(orders) == 1:
+                        order = orders[0]
+                        order_text = (
+                            f"<b>🆕 Yangi buyurtma #{order.id}</b>\n\n"
+                            f"<b>👤 Mijoz:</b> {_safe(user.name)}\n"
+                            f"<b>📞 Telefon:</b> {_safe(user.phone)}\n"
+                            f"<b>🚗 Kategoriya:</b> {_safe(order.car_category)}\n"
+                            f"<b>🚗 Model:</b> {_safe(order.car_model)}\n"
+                            f"<b>🪪 Davlat raqami:</b> {_safe(order.plate_number)}\n"
+                            f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
+                            f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}\n"
+                            f"<b>💳 To'lov:</b> {_safe(order.payment_method)}\n"
+                            f"<b>📝 Izoh:</b> {_safe(order.comment or '—')}"
+                        )
+                        await bot.send_message(
+                            recipient_id,
+                            order_text,
+                            reply_markup=new_order_assignment_keyboard(order.id),
+                        )
+                    else:
+                        await send_group_summary(
+                            bot, settings, "Yangi guruh buyurtmasi",
+                            user, orders, group_id, recipient_id=recipient_id,
+                        )
+                    notified = True
+                    await bot.send_location(
+                        recipient_id,
+                        latitude=float(orders[0].latitude),
+                        longitude=float(orders[0].longitude),
                     )
-                    await bot.send_message(
-                        settings.director_id,
-                        director_text,
-                        reply_markup=new_order_assignment_keyboard(order.id),
+                except Exception:
+                    logger.exception(
+                        "Could not notify staff member %s about order group %s",
+                        recipient_id, group_id or orders[0].id,
                     )
-                else:
-                    await send_group_summary(
-                        bot,
-                        settings,
-                        "Yangi guruh buyurtmasi",
-                        user,
-                        orders,
-                        group_id,
-                    )
-                await bot.send_location(
-                    settings.director_id,
-                    latitude=float(orders[0].latitude),
-                    longitude=float(orders[0].longitude),
-                )
-            except Exception:
-                logger.exception(
-                    "Could not notify director about order group %s",
-                    group_id or orders[0].id,
-                )
+            if not notified:
+                for order in orders:
+                    await escalate_unassigned_order(order.id)
+            elif operator_ids:
+                for order in orders:
+                    try:
+                        schedule_operator_review(scheduler, order.id, datetime.now(TASHKENT))
+                    except Exception:
+                        logger.exception("Could not schedule review for order %s", order.id)
+                        await escalate_unassigned_order(order.id)
 
         await state.clear()
         await message.answer(

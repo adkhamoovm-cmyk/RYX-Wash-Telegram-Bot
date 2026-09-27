@@ -6,3 +6,4 @@
 - [Worker ETA recovery](worker-eta-recovery.md) — recover ETA input from the active database order when in-memory FSM state is unavailable.
 - [Worker status reconciliation](worker-status-reconciliation.md) — never trust a persisted busy flag without checking for a live nonterminal order.
 - [Order completion recipients](order-completion-recipients.md) — notify all current operators, not a guessed creator, until orders retain staff provenance.
+- [Operator review escalation](operator-review-escalation.md) — operator approval means worker assignment; escalate each unassigned customer car after 30 minutes.

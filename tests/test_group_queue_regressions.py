@@ -2243,6 +2243,159 @@ def test_operator_creates_manual_order_without_director_approval():
     run(scenario())
 
 
+def test_customer_order_goes_to_operator_and_assignment_prevents_escalation():
+    async def scenario():
+        engine, sessions, settings, scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            operator_id = 8200
+            async with sessions() as session:
+                session.add(User(telegram_id=operator_id, name="Operator", rol="operator"))
+                await session.commit()
+            bot = RecordingBot()
+            configure_wash_timer_runtime(sessions, bot, settings)
+            state = RecordingState({
+                "cars": [{"car_category": "Sedan", "car_model": "Cobalt",
+                          "car_price": 50000, "plate_number": "01 A 123 BC"}],
+                "payment_method": "Naqd",
+                "latitude": 41.3,
+                "longitude": 69.2,
+            })
+            await handler(router, "message", "receive_comment")(
+                RecordingMessage(bot, CUSTOMER_ID, "⏭️ O'tkazib yuborish"), state
+            )
+            async with sessions() as session:
+                order_id = (await session.scalar(select(Order))).id
+            assert any(call[1] == operator_id and "Yangi buyurtma" in call[2]
+                       for call in bot.calls if call[0] == "send_message")
+            assert not any(call[1] == DIRECTOR_ID for call in bot.calls)
+            job = scheduler.jobs[f"operator-review:{order_id}"]
+            assert timedelta(minutes=29) <= job["run_date"] - datetime.now(worker_handlers.TASHKENT) <= timedelta(minutes=30)
+            await handler(router, "callback_query", "show_available_workers")(
+                RecordingCallback(f"assign_workers:{order_id}", operator_id, bot)
+            )
+            await handler(router, "callback_query", "choose_wash_duration")(
+                RecordingCallback(f"assign_worker:{order_id}:{WORKER_ONE_ID}", operator_id, bot)
+            )
+            await handler(router, "callback_query", "choose_order_share")(
+                RecordingCallback(f"order_share:default:{order_id}:{WORKER_ONE_ID}", operator_id, bot),
+                RecordingState(),
+            )
+            async with sessions() as session:
+                order = await session.get(Order, order_id)
+                assert order.worker_id == WORKER_ONE_ID
+                assert order.status == "ishchiga_yuborildi"
+            await job["callback"](order_id)
+            assert not any(call[1] == DIRECTOR_ID for call in bot.calls)
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_unassigned_customer_order_escalates_to_director_after_review():
+    async def scenario():
+        engine, sessions, settings, scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            async with sessions() as session:
+                session.add(User(telegram_id=8200, name="Operator", rol="operator"))
+                await session.commit()
+            bot = RecordingBot()
+            configure_wash_timer_runtime(sessions, bot, settings)
+            state = RecordingState({
+                "cars": [{"car_category": "Sedan", "car_model": "Cobalt",
+                          "car_price": 50000, "plate_number": "01 A 123 BC"}],
+                "payment_method": "Naqd", "latitude": 41.3, "longitude": 69.2,
+            })
+            await handler(router, "message", "receive_comment")(
+                RecordingMessage(bot, CUSTOMER_ID, "Izoh"), state
+            )
+            async with sessions() as session:
+                order_id = (await session.scalar(select(Order))).id
+            assert not any(call[1] == DIRECTOR_ID for call in bot.calls)
+            await scheduler.jobs[f"operator-review:{order_id}"]["callback"](order_id)
+            director_messages = [call for call in bot.calls
+                                 if call[0] == "send_message" and call[1] == DIRECTOR_ID]
+            assert len(director_messages) == 1
+            assert "Operator 30 daqiqada biriktirmadi" in director_messages[0][2]
+            assert "01 A 123 BC" in director_messages[0][2]
+            assert director_messages[0][3]["reply_markup"] is not None
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_customer_order_goes_directly_to_director_when_no_operator_exists():
+    async def scenario():
+        engine, sessions, _settings, scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            bot = RecordingBot()
+            await handler(router, "message", "receive_comment")(
+                RecordingMessage(bot, CUSTOMER_ID, "⏭️ O'tkazib yuborish"),
+                RecordingState({
+                    "cars": [{"car_category": "Sedan", "car_model": "Cobalt",
+                              "car_price": 50000, "plate_number": "01 A 123 BC"}],
+                    "payment_method": "Naqd", "latitude": 41.3, "longitude": 69.2,
+                }),
+            )
+            assert any(call[0] == "send_message" and call[1] == DIRECTOR_ID
+                       and "Yangi buyurtma" in call[2] for call in bot.calls)
+            assert not any(job_id.startswith("operator-review:") for job_id in scheduler.jobs)
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
+def test_group_split_stays_with_operator_and_only_unassigned_car_escalates():
+    async def scenario():
+        engine, sessions, settings, scheduler, router = await make_context()
+        try:
+            await add_people(sessions)
+            operator_id = 8200
+            async with sessions() as session:
+                session.add(User(telegram_id=operator_id, name="Operator", rol="operator"))
+                await session.commit()
+            bot = RecordingBot()
+            configure_wash_timer_runtime(sessions, bot, settings)
+            cars = [
+                {"car_category": "Sedan", "car_model": model,
+                 "car_price": 50000, "plate_number": f"01 A 12{i} BC"}
+                for i, model in enumerate(("Cobalt", "Nexia"), 1)
+            ]
+            await handler(router, "message", "receive_comment")(
+                RecordingMessage(bot, CUSTOMER_ID, "Izoh"),
+                RecordingState({"cars": cars, "payment_method": "Naqd",
+                                "latitude": 41.3, "longitude": 69.2}),
+            )
+            async with sessions() as session:
+                orders = list((await session.scalars(select(Order).order_by(Order.id))).all())
+                group_id = orders[0].order_group_id
+                order_ids = [order.id for order in orders]
+            await handler(router, "callback_query", "split_group_orders")(
+                RecordingCallback(f"group_split:{group_id}:{order_ids[0]}", operator_id, bot)
+            )
+            assert not any(call[1] == DIRECTOR_ID for call in bot.calls)
+            async with sessions() as session:
+                first = await session.get(Order, order_ids[0])
+                first.worker_id = WORKER_ONE_ID
+                first.status = "ishchiga_yuborildi"
+                await session.commit()
+            for order_id in order_ids:
+                await scheduler.jobs[f"operator-review:{order_id}"]["callback"](order_id)
+            director_messages = [call for call in bot.calls
+                                 if call[0] == "send_message" and call[1] == DIRECTOR_ID]
+            assert len(director_messages) == 1
+            assert f"Buyurtma #{order_ids[1]}" in director_messages[0][2]
+        finally:
+            await engine.dispose()
+
+    run(scenario())
+
+
 def test_worker_completes_with_only_before_photo_and_skipped_comment():
     async def scenario():
         engine, sessions, _settings, _scheduler, router = await make_context()

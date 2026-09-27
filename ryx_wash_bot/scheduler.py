@@ -12,12 +12,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from .config import Settings
-from .models import Order, Worker
+from .models import Order, User, Worker
+from .keyboards import new_order_assignment_keyboard
 
 logger = logging.getLogger(__name__)
 TASHKENT = ZoneInfo("Asia/Tashkent")
 DEFAULT_WASH_DURATION_MINUTES = 60
 DAILY_REPORT_JOB_ID = "daily-financial-report"
+OPERATOR_REVIEW_MINUTES = 30
 
 _sessions: async_sessionmaker[AsyncSession] | None = None
 _bot: Bot | None = None
@@ -79,6 +81,58 @@ def schedule_daily_report(scheduler: AsyncIOScheduler) -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
+
+
+def schedule_operator_review(
+    scheduler: AsyncIOScheduler, order_id: int, created_at: datetime
+) -> None:
+    scheduler.add_job(
+        escalate_unassigned_order,
+        trigger="date",
+        run_date=created_at + timedelta(minutes=OPERATOR_REVIEW_MINUTES),
+        args=[order_id],
+        id=f"operator-review:{order_id}",
+        replace_existing=True,
+        misfire_grace_time=None,
+    )
+
+
+async def escalate_unassigned_order(order_id: int) -> None:
+    """Escalate a customer order only if no worker has been assigned."""
+    if _sessions is None or _bot is None or _settings is None:
+        logger.error("Operator-review runtime is not configured for order %s", order_id)
+        return
+    async with _sessions() as session:
+        order = await session.get(Order, order_id)
+        if not order or order.worker_id is not None or order.status not in {"yangi", "navbatda"}:
+            return
+        customer = await session.get(User, order.customer_id)
+        text = (
+            f"<b>⏰ Operator 30 daqiqada biriktirmadi | Buyurtma #{order.id}</b>\n\n"
+            f"<b>👤 Mijoz:</b> {_safe_worker_name(customer.name if customer else '—')}\n"
+            f"<b>📞 Telefon:</b> {_safe_worker_name(customer.phone if customer else '—')}\n"
+            f"<b>🚗 Mashina:</b> {_safe_worker_name(order.car_model)}\n"
+            f"<b>🪪 Davlat raqami:</b> {_safe_worker_name(order.plate_number or 'Ko‘rsatilmagan')}\n"
+            f"<b>🎨 Rang:</b> {_safe_worker_name(order.car_color or '—')}\n"
+            f"<b>💰 Narx:</b> {order.car_price:,.0f} so‘m\n"
+            f"<b>💳 To‘lov:</b> {_safe_worker_name(order.payment_method or 'Ko‘rsatilmagan')}\n"
+            f"<b>📝 Izoh:</b> {_safe_worker_name(order.comment or '—')}\n"
+            f"<b>📍 Manzil:</b> {_safe_worker_name(order.address or 'Lokatsiya yuborilgan')}"
+        )
+        location = (float(order.latitude), float(order.longitude)) if (
+            order.latitude is not None and order.longitude is not None
+        ) else None
+    try:
+        await _bot.send_message(
+            _settings.director_id, text,
+            reply_markup=new_order_assignment_keyboard(order_id),
+        )
+        if location:
+            await _bot.send_location(
+                _settings.director_id, latitude=location[0], longitude=location[1],
+            )
+    except Exception:
+        logger.exception("Could not escalate unassigned order %s", order_id)
 
 
 async def send_daily_financial_report() -> None:

@@ -144,6 +144,10 @@ def _register_user_routes(
         user = await find_user(session, user_id)
         return bool(user and user.rol == "direktor")
 
+    async def can_assign_order(session: AsyncSession, user_id: int) -> bool:
+        user = await find_user(session, user_id)
+        return bool(user and user.rol in {"direktor", "operator"})
+
     async def get_worker(session: AsyncSession, user_id: int) -> Worker | None:
         return await session.scalar(select(Worker).where(Worker.user_id == user_id))
 
@@ -842,7 +846,7 @@ def _register_user_routes(
             return
         group_id, _lead_id = parts
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             orders = list(
@@ -904,7 +908,7 @@ def _register_user_routes(
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             lead_order = await session.get(Order, lead_order_id)
@@ -967,7 +971,7 @@ def _register_user_routes(
             await callback.answer("❌ Yuvish vaqti noto'g'ri.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             lead_order_snapshot = await session.get(Order, lead_order_id)
@@ -1046,7 +1050,7 @@ def _register_user_routes(
             return
         group_id, _lead_id = parts
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
             orders = list(
@@ -1078,12 +1082,12 @@ def _register_user_routes(
         )
         for order in orders:
             await callback.bot.send_message(
-                settings.director_id,
-            f"<b>📋 Buyurtma #{order.id}</b>\n"
-            f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
-            f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
-            f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
-            f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}",
+                callback.from_user.id,
+                f"<b>📋 Buyurtma #{order.id}</b>\n"
+                f"<b>🚗 Mashina:</b> {_safe(order.car_model)}\n"
+                f"<b>🪪 Davlat raqami:</b> {_safe(_plate_display(order.plate_number))}\n"
+                f"<b>🎨 Rang:</b> {_safe(order.car_color or '—')}\n"
+                f"<b>💰 Narx:</b> {_safe(format_price(int(order.car_price)))}",
                 reply_markup=new_order_assignment_keyboard(order.id),
             )
 
@@ -1408,7 +1412,7 @@ def _register_user_routes(
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             order = await session.get(Order, order_id, with_for_update=True)
@@ -1454,7 +1458,7 @@ def _register_user_routes(
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             order = await session.get(Order, order_id, with_for_update=True)
@@ -1484,7 +1488,7 @@ def _register_user_routes(
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
             order = await session.get(Order, order_id)
@@ -1530,7 +1534,7 @@ def _register_user_routes(
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
             order = await session.get(Order, order_id)
@@ -1655,7 +1659,7 @@ def _register_user_routes(
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("Bu amal faqat direktor uchun.", show_alert=True)
                 return
             order = await session.get(Order, order_id, with_for_update=True)
@@ -1714,7 +1718,7 @@ def _register_user_routes(
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             order = await session.get(Order, order_id)
@@ -1764,7 +1768,7 @@ def _register_user_routes(
             await callback.answer("❌ Yuvish vaqti noto'g'ri.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
             # End the authorization read transaction before the compare-and-set
@@ -1863,7 +1867,7 @@ def _register_user_routes(
         if not callback.from_user:
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer("❌ Bu amal faqat direktor uchun.", show_alert=True)
                 return
         prefix = callback.data.split(":", 1)[0] if isinstance(callback.data, str) else ""
@@ -1915,7 +1919,7 @@ def _register_user_routes(
         if not message.from_user:
             return
         async with sessions() as session:
-            if not await is_director(session, message.from_user.id):
+            if not await can_assign_order(session, message.from_user.id):
                 await state.clear()
                 await message.answer("❌ Bu amal faqat direktor uchun.")
                 return
@@ -1978,7 +1982,7 @@ def _register_user_routes(
             await callback.answer("❌ Tugma ma'lumoti eskirgan.", show_alert=True)
             return
         async with sessions() as session:
-            if not await is_director(session, callback.from_user.id):
+            if not await can_assign_order(session, callback.from_user.id):
                 await callback.answer(
                     "❌ Bu amal faqat direktor uchun.", show_alert=True
                 )
